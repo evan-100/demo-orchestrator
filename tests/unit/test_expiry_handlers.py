@@ -14,6 +14,7 @@ from typing import Any
 
 import kopf
 import pytest
+from kubernetes.client.exceptions import ApiException
 
 from orchestrator.constants import (
     ANNOTATION_EXPIRES_AT,
@@ -382,3 +383,65 @@ def test_name_too_long_for_a_namespace_is_deleted_immediately(
         meta={"deletionTimestamp": "2026-09-24T15:05:00Z"},
     )
     assert _events(ledger) == [EventType.DELETED]
+
+
+class _BrokenKube(FakeKube):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error = error
+
+    def get_namespace(self, name: str) -> NamespaceInfo | None:
+        raise self.error
+
+
+_LOOKUP_ERRORS = [
+    ApiException(status=500, reason="Internal Server Error"),
+    ApiException(status=403, reason="Forbidden"),
+]
+
+
+@pytest.mark.parametrize("error", _LOOKUP_ERRORS)
+def test_lookup_errors_after_timeout_release_the_finalizer(
+    monkeypatch: pytest.MonkeyPatch,
+    ledger: Ledger,
+    personas: dict[str, Persona],
+    clock: Clock,
+    error: ApiException,
+) -> None:
+    deps = LifecycleDeps(kube=_BrokenKube(error), ledger=ledger, personas=personas)
+    monkeypatch.setattr(handlers, "_lifecycle_deps", lambda: deps)
+    clock.now = datetime(2026, 9, 24, 15, 5, 0, tzinfo=UTC) + timedelta(seconds=121)
+    _finalize(_status())  # returns: the finalizer is released
+    events = list(ledger.read())
+    assert [e.event for e in events] == [EventType.DELETE_TIMEOUT]
+    assert events[0].details["elapsed_seconds"] == 121.0
+    assert events[0].details["error"].startswith("ApiException")
+    assert str(error.status) in events[0].details["error"]
+
+
+@pytest.mark.parametrize(
+    ("error", "raised"),
+    [(_LOOKUP_ERRORS[0], kopf.TemporaryError), (_LOOKUP_ERRORS[1], ApiException)],
+)
+def test_lookup_errors_before_timeout_are_retried(
+    monkeypatch: pytest.MonkeyPatch,
+    ledger: Ledger,
+    personas: dict[str, Persona],
+    clock: Clock,
+    error: ApiException,
+    raised: type[Exception],
+) -> None:
+    deps = LifecycleDeps(kube=_BrokenKube(error), ledger=ledger, personas=personas)
+    monkeypatch.setattr(handlers, "_lifecycle_deps", lambda: deps)
+    clock.now = datetime(2026, 9, 24, 15, 5, 0, tzinfo=UTC) + timedelta(seconds=119)
+    with pytest.raises(raised):
+        _finalize(_status())
+    assert _events(ledger) == []
+
+
+def test_delete_handler_has_a_kopf_timeout_backstop() -> None:
+    registry = kopf.get_default_registry()
+    [handler] = [h for h in registry._changing.get_all_handlers() if h.fn is handlers.on_delete]
+    assert handler.timeout is not None
+    assert handler.timeout > lifecycle.DELETE_TIMEOUT.total_seconds()
+    assert handler.backoff == 3

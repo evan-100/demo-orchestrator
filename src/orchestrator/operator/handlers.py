@@ -30,6 +30,11 @@ from orchestrator.operator.provision import WAIT_DELAY_SECONDS, ProvisionDeps, p
 EXPIRY_CHECK_INTERVAL_SECONDS = 10
 TRANSIENT_STATUSES = frozenset({409, 429})
 TRANSIENT_PREFIX = "transient API error"
+# kopf-level backstop for the finalizer, beyond lifecycle.DELETE_TIMEOUT (120 s).
+# When it hits, kopf marks the handler failed (HandlerTimeoutError), which counts
+# as finished, so the finalizer is still removed. backoff=3 keeps kopf's 60 s
+# default from both slowing retries and triggering its timeout lookahead early.
+DELETE_HANDLER_TIMEOUT_SECONDS = 150
 
 
 @lru_cache
@@ -177,7 +182,13 @@ def expiry_timer(
         )
 
 
-@kopf.on.delete(GROUP, VERSION, PLURAL)
+@kopf.on.delete(
+    GROUP,
+    VERSION,
+    PLURAL,
+    timeout=DELETE_HANDLER_TIMEOUT_SECONDS,
+    backoff=WAIT_DELAY_SECONDS,
+)
 def on_delete(
     name: str,
     spec: kopf.Spec | dict[str, Any],

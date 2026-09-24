@@ -191,8 +191,39 @@ def finalize(
     reason: Literal["expired", "manual"] = (
         "expired" if status.get("phase") == EXPIRING else "manual"
     )
+    # Measured first, from a timestamp stored on the object: once past the
+    # timeout the finalizer is released whatever the cluster says, so an API
+    # outage or an RBAC gap can never hold a CR in deletion forever.
+    elapsed = now - from_rfc3339(meta["deletionTimestamp"])
+    timed_out = elapsed > DELETE_TIMEOUT
+
+    def timeout(**extra: Any) -> None:
+        _log(
+            deps,
+            EventType.DELETE_TIMEOUT,
+            name=name,
+            spec=spec,
+            details={
+                "elapsed_seconds": round(elapsed.total_seconds(), 1),
+                "reason": reason,
+                **extra,
+            },
+        )
+
     namespace_name = _namespace_name(name)
-    ns = deps.kube.get_namespace(namespace_name) if namespace_name else None
+    try:
+        ns = deps.kube.get_namespace(namespace_name) if namespace_name else None
+        if ns is not None and not timed_out and not ns.terminating:
+            if not is_deletable_namespace(ns.name, ns.labels):
+                # Not ours to delete (label missing or tampered with): never touch it.
+                timeout(error=f"deletion guard refused namespace {ns.name}")
+                return
+            deps.kube.delete_namespace(ns)
+    except Exception as exc:
+        if not timed_out:
+            raise  # retried: transient errors in 3 s, others with the handler backoff
+        timeout(error=f"{type(exc).__name__}: {exc}")
+        return
 
     if ns is None:
         expires_at = status.get("expiresAt")
@@ -206,33 +237,9 @@ def finalize(
         )
         return
 
-    elapsed = now - from_rfc3339(meta["deletionTimestamp"])
-    if elapsed > DELETE_TIMEOUT:
-        _log(
-            deps,
-            EventType.DELETE_TIMEOUT,
-            name=name,
-            spec=spec,
-            details={"elapsed_seconds": round(elapsed.total_seconds(), 1), "reason": reason},
-        )
+    if timed_out:
+        timeout()
         return
-
-    if not ns.terminating:
-        if not is_deletable_namespace(ns.name, ns.labels):
-            # Not ours to delete (label missing or tampered with): never touch it.
-            _log(
-                deps,
-                EventType.DELETE_TIMEOUT,
-                name=name,
-                spec=spec,
-                details={
-                    "elapsed_seconds": round(elapsed.total_seconds(), 1),
-                    "reason": reason,
-                    "error": f"deletion guard refused namespace {ns.name}",
-                },
-            )
-            return
-        deps.kube.delete_namespace(ns)
 
     raise kopf.TemporaryError(
         f"waiting for namespace {ns.name} to be deleted", delay=WAIT_DELAY_SECONDS
