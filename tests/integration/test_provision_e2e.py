@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from conftest import Operator, kubectl
 
+from orchestrator.constants import ANNOTATION_EXPIRES_AT, GROUP, KIND, VERSION
 from orchestrator.core.ledger import EventType, Ledger
 from orchestrator.core.naming import generate_env_name, namespace_for
 
@@ -35,8 +36,8 @@ def _wait_namespace_gone(namespace: str) -> None:
 def demo_env(operator: Operator) -> Iterator[str]:
     name = generate_env_name("healthcare")
     manifest = {
-        "apiVersion": "orchestrator.local/v1alpha1",
-        "kind": "DemoEnvironment",
+        "apiVersion": f"{GROUP}/{VERSION}",
+        "kind": KIND,
         "metadata": {"name": name},
         "spec": {"persona": "healthcare", "ttl": "10m", "requestedBy": "integration-test"},
     }
@@ -71,7 +72,7 @@ def test_provision_reaches_ready_and_serves_persona(operator: Operator, demo_env
     annotations = json.loads(kubectl("get", "namespace", status["namespace"], "-o", "json"))[
         "metadata"
     ]["annotations"]
-    assert annotations["orchestrator.local/expires-at"] == status["expiresAt"]
+    assert annotations[ANNOTATION_EXPIRES_AT] == status["expiresAt"]
 
     with urllib.request.urlopen(f"{status['url']}/people", timeout=10) as response:
         assert response.status == 200

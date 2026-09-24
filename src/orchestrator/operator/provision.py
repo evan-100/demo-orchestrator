@@ -6,7 +6,9 @@ needs to resume lives in the CR status, so a pass after an operator restart
 converges exactly like the next pass would have. The order is:
 
 1. First pass only (no `status.createdAt` yet): record `createdAt`, write the
-   `requested` ledger event, and run admission (persona, TTL, capacity).
+   `requested` ledger event, and run admission (persona, TTL, capacity). The
+   pass ends there (a 1 s `TemporaryError`) so the status is persisted before
+   any cluster work.
 2. Apply the namespace, then every workload (server-side apply, idempotent).
 3. Wait for the postgres Deployment, then enter `Seeding` and apply the seed
    Job. The seed has no DB retry of its own, so it must not start earlier.
@@ -52,6 +54,7 @@ from orchestrator.k8s.manifests import (
 )
 
 WAIT_DELAY_SECONDS = 3
+ADMITTED_DELAY_SECONDS = 1
 FAILED_INSPECTION_WINDOW = timedelta(minutes=10)
 
 POSTGRES_DEPLOYMENT = "postgres"
@@ -224,7 +227,7 @@ def provision(
     failure, or returns once the environment is Ready.
     """
     status = status or {}
-    if status.get("phase") in ("Ready", "Failed"):
+    if status.get("phase") in ("Ready", "Failed", "Expiring"):
         return
 
     try:
@@ -243,37 +246,61 @@ def provision(
     created_at = from_rfc3339(creation_timestamp)
 
     if "createdAt" not in status:
+        # First pass: admit and persist, touching nothing in the cluster yet.
+        # Ending the pass here lets kopf write `createdAt` before any cluster
+        # work, so a crash after this point never repeats the `requested` event.
         patch_status.update(
-            {
-                "phase": "Provisioning",
-                "createdAt": to_rfc3339(created_at),
-                "namespace": p.namespace,
-                "message": "",
-            }
+            {"phase": "Provisioning", "createdAt": to_rfc3339(created_at), "message": ""}
         )
         p.log(EventType.REQUESTED, {"ttl": spec.get("ttl"), "requestedBy": spec.get("requestedBy")})
         if name_error is not None:
             p.fail(name_error, namespace_exists=False)
         try:
-            persona, ttl = check_admission(
+            _, ttl = check_admission(
                 spec, deps.personas, deps.kube.count_active_envs(exclude=name), deps.max_envs
             )
         except AdmissionError as exc:
             p.fail(exc.message, namespace_exists=False)
-    else:
-        try:
-            persona, ttl = resolve_request(spec, deps.personas)
-        except AdmissionError as exc:
-            p.fail(exc.message, namespace_exists=CP_PROVISIONING in p.checkpoints)
+        patch_status.update(
+            {
+                "namespace": p.namespace,
+                "expiresAt": to_rfc3339(compute_expires_at(created_at, ttl)),
+            }
+        )
+        raise kopf.TemporaryError(
+            "waiting for the admission result to be persisted", delay=ADMITTED_DELAY_SECONDS
+        )
+
+    namespace_exists = CP_PROVISIONING in p.checkpoints
+    try:
+        persona = get_persona(deps.personas, str(spec.get("persona", "")))
+    except UnknownPersonaError as exc:
+        p.fail(str(exc.args[0]), namespace_exists=namespace_exists)
 
     if utcnow() - created_at > deps.provision_timeout:
         p.fail(
             f"provision timeout: not Ready within {int(deps.provision_timeout.total_seconds())}s",
-            namespace_exists=CP_PROVISIONING in p.checkpoints,
+            namespace_exists=namespace_exists,
         )
 
-    expires_at = compute_expires_at(created_at, ttl)
+    # `spec.ttl` may change while we provision (kopf only reports it as a field
+    # change once creation is done), so the expiry follows the current spec. An
+    # invalid new TTL can't be reverted: keep the admitted expiry and say why.
+    ttl_error = None
+    try:
+        ttl = parse_duration(str(spec.get("ttl", "")))
+        validate_total_ttl(ttl, persona.max_ttl)
+        expires_at = compute_expires_at(created_at, ttl)
+    except (InvalidDurationError, TTLExceedsMaxError) as exc:
+        if "expiresAt" not in status:
+            p.fail(str(exc), namespace_exists=namespace_exists)
+        ttl_error = f"TTL change rejected: {exc}"
+        expires_at = from_rfc3339(status["expiresAt"])
+        patch_status["message"] = ttl_error
     patch_status["expiresAt"] = to_rfc3339(expires_at)
+    if CP_WORKLOADS in p.checkpoints and status.get("expiresAt") != patch_status["expiresAt"]:
+        deps.kube.set_namespace_expiry(p.namespace, patch_status["expiresAt"])
+
     ctx = EnvContext(
         env_name=name,
         namespace=p.namespace,
@@ -317,7 +344,7 @@ def provision(
             "readyAt": ready_at,
             "url": url_for(ctx),
             "timings": timings,
-            "message": "",
+            "message": ttl_error or "",
         }
     )
     p.log(

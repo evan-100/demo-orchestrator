@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from orchestrator.constants import GROUP, PLURAL
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CRD_PATH = REPO_ROOT / "deploy" / "crd" / "demoenvironments.yaml"
 OPERATOR_COMMAND = [
@@ -54,7 +56,7 @@ def crd() -> None:
     kubectl(
         "wait",
         "--for=condition=Established",
-        "crd/demoenvironments.orchestrator.local",
+        f"crd/{PLURAL}.{GROUP}",
         "--timeout=30s",
     )
 
