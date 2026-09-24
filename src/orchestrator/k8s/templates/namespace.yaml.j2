@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ namespace }}
+  labels:
+    {{ label_managed_by }}: {{ managed_by_value }}
+    {{ label_env }}: {{ env_name }}
+    {{ label_persona }}: {{ persona.name }}
+  annotations:
+    {{ annotation_expires_at }}: "{{ expires_at }}"
+  ownerReferences:
+    - apiVersion: {{ group }}/{{ version }}
+      kind: {{ kind }}
+      name: {{ env_name }}
+      uid: {{ owner_uid }}
+      controller: true
+      blockOwnerDeletion: true

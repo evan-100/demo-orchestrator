@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: demo-quota
+  namespace: {{ namespace }}
+  labels:
+    {{ label_managed_by }}: {{ managed_by_value }}
+spec:
+  hard:
+    requests.cpu: "{{ persona.resources.cpu }}"
+    requests.memory: {{ persona.resources.memory }}
+    limits.cpu: "{{ persona.resources.cpu }}"
+    limits.memory: {{ persona.resources.memory }}
+    pods: "{{ persona.resources.pods }}"

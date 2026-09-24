@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crewline
+  namespace: {{ namespace }}
+  labels:
+    app: crewline
+    {{ label_managed_by }}: {{ managed_by_value }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: crewline
+  template:
+    metadata:
+      labels:
+        app: crewline
+        {{ label_env }}: {{ env_name }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: crewline
+          image: {{ crewline_image }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: DATABASE_URL
+            - name: PERSONA_FILE
+              value: /persona/persona.yaml
+            - name: EXPIRES_AT
+              value: "{{ expires_at }}"
+          volumeMounts:
+            - name: persona
+              mountPath: /persona
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10001
+      volumes:
+        - name: persona
+          configMap:
+            name: persona
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: crewline
+  namespace: {{ namespace }}
+  labels:
+    {{ label_managed_by }}: {{ managed_by_value }}
+spec:
+  selector:
+    app: crewline
+  ports:
+    - port: 8080
+      targetPort: 8080

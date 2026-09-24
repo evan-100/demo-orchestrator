@@ -1,0 +1,102 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: demoenvironments.orchestrator.local
+spec:
+  group: orchestrator.local
+  scope: Cluster
+  names:
+    plural: demoenvironments
+    singular: demoenvironment
+    kind: DemoEnvironment
+    listKind: DemoEnvironmentList
+    shortNames:
+      - demoenv
+      - de
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Persona
+          type: string
+          jsonPath: .spec.persona
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Expires
+          type: string
+          jsonPath: .status.expiresAt
+        - name: URL
+          type: string
+          jsonPath: .status.url
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - persona
+                - ttl
+              properties:
+                persona:
+                  type: string
+                  description: >-
+                    Persona name (folder under personas/). Existence is
+                    validated by the operator, not the schema.
+                  pattern: '^[a-z][a-z0-9-]{1,20}$'
+                ttl:
+                  type: string
+                  description: >-
+                    Requested time-to-live, e.g. "2h", "30m", "1h30m".
+                    Semantic bounds (total > 0, <= persona max_ttl, <= 8h
+                    hard ceiling) are validated by the operator.
+                  pattern: '^([0-9]+h)?([0-9]+m)?([0-9]+s)?$'
+                  minLength: 2
+                requestedBy:
+                  type: string
+                  description: Free-text requester identity, for display only.
+                  maxLength: 64
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Provisioning
+                    - Seeding
+                    - Ready
+                    - Expiring
+                    - Failed
+                namespace:
+                  type: string
+                url:
+                  type: string
+                message:
+                  type: string
+                createdAt:
+                  type: string
+                readyAt:
+                  type: string
+                expiresAt:
+                  type: string
+                timings:
+                  type: object
+                  properties:
+                    namespaceSeconds:
+                      type: number
+                    appReadySeconds:
+                      type: number
+                    seedSeconds:
+                      type: number
+                    totalSeconds:
+                      type: number
