@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.core.personas import UnknownPersonaError, get_persona, load_personas
+from orchestrator.core.personas import (
+    UnknownPersonaError,
+    get_persona,
+    load_persona_file,
+    load_personas,
+)
 
 REPO_PERSONAS = Path(__file__).parents[2] / "personas"
 
@@ -25,3 +30,8 @@ def test_default_ttl_above_max_rejected(tmp_path):
     )
     with pytest.raises(ValueError):
         load_personas(tmp_path)
+
+
+def test_load_persona_file_matches_directory_loader():
+    persona = load_persona_file(REPO_PERSONAS / "restaurant" / "persona.yaml")
+    assert persona == load_personas(REPO_PERSONAS)["restaurant"]

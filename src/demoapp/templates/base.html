@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} · {{ brand.company_name }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+  <style>:root { --brand: {{ brand.primary_color }}; }</style>
+</head>
+<body>
+  <div class="demo-banner" role="note">
+    <span class="demo-banner__pulse" aria-hidden="true"></span>
+    <span{% if expires_at %} title="{{ expires_at.strftime('%Y-%m-%d %H:%M UTC') }}"{% endif %}>Demo environment · {{ persona.display_name }} · {{ expiry }}</span>
+  </div>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="tenant" href="/">
+        <span class="tenant__mark" aria-hidden="true">{{ initials }}</span>
+        <span class="tenant__text">
+          <span class="tenant__name">{{ brand.company_name }}</span>
+          <span class="tenant__product">Crewline workforce</span>
+        </span>
+      </a>
+      <nav class="nav" aria-label="Main">
+        {% for key, href, label in nav %}
+        <a class="nav__link{% if key == page %} is-active{% endif %}" href="{{ href }}"{% if key == page %} aria-current="page"{% endif %}>{{ label }}</a>
+        {% endfor %}
+      </nav>
+      <p class="sidebar__foot">Sample data for demonstration. Names and figures are fictional.</p>
+    </aside>
+    <main class="main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

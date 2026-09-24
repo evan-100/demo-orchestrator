@@ -78,6 +78,11 @@ class UnknownPersonaError(KeyError):
     """Raised when a requested persona name isn't among the loaded personas."""
 
 
+def load_persona_file(path: Path) -> Persona:
+    """Load and validate a single persona YAML file (e.g. a mounted ConfigMap key)."""
+    return Persona.model_validate(yaml.safe_load(path.read_text()))
+
+
 def load_personas(directory: Path) -> dict[str, Persona]:
     """Load every `<directory>/<name>/persona.yaml` into a `{name: Persona}` map.
 
@@ -87,8 +92,7 @@ def load_personas(directory: Path) -> dict[str, Persona]:
     personas: dict[str, Persona] = {}
     for path in sorted(directory.glob("*/persona.yaml")):
         folder_name = path.parent.name
-        raw = yaml.safe_load(path.read_text())
-        persona = Persona.model_validate(raw)
+        persona = load_persona_file(path)
         if persona.name != folder_name:
             raise ValueError(
                 f"persona name {persona.name!r} does not match folder name {folder_name!r}"

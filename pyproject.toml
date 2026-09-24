@@ -30,11 +30,11 @@ requires = ["uv_build>=0.12.18,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = "orchestrator"
+module-name = ["orchestrator", "demoapp"]
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
+    "httpx2>=2.13.1",
     "mypy>=2.3.1",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
