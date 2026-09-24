@@ -349,6 +349,27 @@ def test_postgres_uses_pinned_alpine_image_and_emptydir(ctx: EnvContext) -> None
     assert next(v for v in volumes if v["name"] == "data")["emptyDir"] == {}
 
 
+def _postgres_deployment(ctx: EnvContext) -> dict[str, Any]:
+    return next(
+        d
+        for d in render_workloads(ctx)
+        if d["kind"] == "Deployment" and d["metadata"]["name"] == "postgres"
+    )
+
+
+def test_postgres_probes_use_tcp_pg_isready(ctx: EnvContext) -> None:
+    # Over TCP, not the Unix socket: during initdb the entrypoint runs a
+    # socket-only temporary server, which must not count as ready.
+    expected = ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "crewline", "-d", "crewline"]
+    container = _containers(_postgres_deployment(ctx))[0]
+    assert container["readinessProbe"]["exec"]["command"] == expected
+    assert container["livenessProbe"]["exec"]["command"] == expected
+
+
+def test_postgres_deployment_uses_recreate_strategy(ctx: EnvContext) -> None:
+    assert _postgres_deployment(ctx)["spec"]["strategy"] == {"type": "Recreate"}
+
+
 # --- Seed Job --------------------------------------------------------------
 
 

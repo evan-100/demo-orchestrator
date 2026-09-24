@@ -66,3 +66,7 @@ warn_unused_ignores = true
 [[tool.mypy.overrides]]
 module = "orchestrator.core.*"
 strict = true
+
+[[tool.mypy.overrides]]
+module = "kubernetes.*"
+ignore_missing_imports = true

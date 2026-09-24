@@ -22,6 +22,8 @@ metadata:
     {{ label_managed_by }}: {{ managed_by_value }}
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: postgres
@@ -51,13 +53,13 @@ spec:
               memory: 256Mi
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "crewline", "-d", "crewline"]
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "crewline", "-d", "crewline"]
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "crewline", "-d", "crewline"]
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "crewline", "-d", "crewline"]
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 3

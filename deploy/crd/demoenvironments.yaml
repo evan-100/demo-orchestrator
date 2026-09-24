@@ -100,3 +100,17 @@ spec:
                       type: number
                     totalSeconds:
                       type: number
+                checkpoints:
+                  type: object
+                  description: >-
+                    Wall-clock start time of each provisioning stage (RFC3339
+                    UTC), kept so timings survive operator restarts.
+                  properties:
+                    provisioningAt:
+                      type: string
+                    workloadsAppliedAt:
+                      type: string
+                    seedingAt:
+                      type: string
+                    seededAt:
+                      type: string
