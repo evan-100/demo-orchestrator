@@ -56,6 +56,21 @@ def test_readyz_503_when_database_unreachable(monkeypatch, tmp_path):
         assert c.get("/readyz").status_code == 503
 
 
+@pytest.mark.parametrize("url", ["mysql+mysqldb://x/y", "not a url"])
+def test_readyz_503_when_engine_cannot_be_created(monkeypatch, url):
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("PERSONA_FILE", str(PERSONA_FILE))
+    with TestClient(create_app()) as c:
+        assert c.get("/readyz").status_code == 503
+
+
+def test_readyz_503_when_database_url_unset(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("PERSONA_FILE", str(PERSONA_FILE))
+    with TestClient(create_app()) as c:
+        assert c.get("/readyz").status_code == 503
+
+
 def test_seed_is_idempotent(db_url):
     seed.run(db_url, PERSONA, today=date(2026, 9, 23))
     counts = {t.name: _count(db_url, t) for t in models.metadata.sorted_tables}

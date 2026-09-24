@@ -7,10 +7,26 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from demoapp.models import seed_marker
 
+# Only psycopg (v3) is installed; SQLAlchemy maps a bare `postgresql://` to psycopg2.
+_POSTGRES_PREFIXES = ("postgresql://", "postgres://")
+_PSYCOPG_PREFIX = "postgresql+psycopg://"
+
+
+def normalize_database_url(database_url: str) -> str:
+    """Point plain Postgres URLs at the psycopg v3 driver; leave other schemes alone."""
+    for prefix in _POSTGRES_PREFIXES:
+        if database_url.startswith(prefix):
+            return _PSYCOPG_PREFIX + database_url[len(prefix) :]
+    return database_url
+
 
 def make_engine(database_url: str) -> sa.Engine:
     """Create an engine; `pool_pre_ping` survives Postgres restarts inside the namespace."""
-    return sa.create_engine(database_url, pool_pre_ping=True)
+    url = normalize_database_url(database_url)
+    connect_args: dict[str, int] = {}
+    if url.startswith("postgresql"):
+        connect_args["connect_timeout"] = 5  # fail /readyz fast on an unreachable host
+    return sa.create_engine(url, pool_pre_ping=True, connect_args=connect_args)
 
 
 def is_seeded(engine: sa.Engine) -> bool:

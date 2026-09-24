@@ -472,7 +472,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def readyz() -> PlainTextResponse:
         try:
             ready = is_seeded(runtime.engine)
-        except (RuntimeError, SQLAlchemyError):  # unset or malformed DATABASE_URL
+        except (RuntimeError, ImportError, SQLAlchemyError):
+            # Unset DATABASE_URL, missing DB driver, or malformed URL (ArgumentError is a
+            # SQLAlchemyError): report "not ready" instead of a 500.
             ready = False
         if ready:
             return PlainTextResponse("ready")
