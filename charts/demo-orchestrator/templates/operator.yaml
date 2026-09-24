@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-operator
+  labels:
+    {{- include "demo-orchestrator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: two operators must never run at once (peering is off).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "demo-orchestrator.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: operator
+  template:
+    metadata:
+      labels:
+        {{- include "demo-orchestrator.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: operator
+      annotations:
+        # Roll the pod when personas change (they are loaded from the mounted files).
+        checksum/personas: {{ include (print $.Template.BasePath "/personas-cm.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-operator
+      securityContext:
+        {{- include "demo-orchestrator.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: operator
+          image: {{ include "demo-orchestrator.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - kopf
+            - run
+            - --standalone
+            - --all-namespaces
+            - --liveness=http://0.0.0.0:8080/healthz
+            - -m
+            - orchestrator.operator.handlers
+          env:
+            {{- include "demo-orchestrator.env" . | nindent 12 }}
+          ports:
+            - name: health
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.operator.resources | nindent 12 }}
+          securityContext:
+            {{- include "demo-orchestrator.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            {{- include "demo-orchestrator.volumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "demo-orchestrator.volumes" . | nindent 8 }}

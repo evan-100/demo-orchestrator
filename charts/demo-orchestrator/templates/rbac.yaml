@@ -1,0 +1,112 @@
+# Operator: everything the kopf handlers and KubeClient call, nothing more.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-operator
+  labels:
+    {{- include "demo-orchestrator.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-operator
+  labels:
+    {{- include "demo-orchestrator.labels" . | nindent 4 }}
+rules:
+  # kopf: discovers and re-scans CRDs at runtime.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["list", "watch"]
+  # Demo namespaces: server-side apply (create/patch), expiry annotation, guarded delete.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  # The CRs: kopf watches and patches (finalizer, progress annotations); count/delete.
+  - apiGroups: ["orchestrator.local"]
+    resources: ["demoenvironments"]
+    verbs: ["get", "list", "watch", "patch", "delete"]
+  - apiGroups: ["orchestrator.local"]
+    resources: ["demoenvironments/status"]
+    verbs: ["patch", "update"]
+  # Namespaces carry an ownerReference with blockOwnerDeletion: true, which needs
+  # update on the owner's finalizers when OwnerReferencesPermissionEnforcement is on.
+  - apiGroups: ["orchestrator.local"]
+    resources: ["demoenvironments/finalizers"]
+    verbs: ["update"]
+  # Per-demo kinds rendered from src/orchestrator/k8s/templates (server-side applied).
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "services", "resourcequotas", "limitranges"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
+  # Readiness polling reads the status subresources (read_namespaced_*_status).
+  - apiGroups: ["apps"]
+    resources: ["deployments/status"]
+    verbs: ["get"]
+  - apiGroups: ["batch"]
+    resources: ["jobs/status"]
+    verbs: ["get"]
+  # kopf posts warnings/errors as Events (cluster-scoped CRs: in "default").
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-operator
+  labels:
+    {{- include "demo-orchestrator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-operator
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-operator
+    namespace: {{ .Release.Namespace }}
+---
+# Sweeper: spec A8 (list/get/delete namespaces; get/list/delete demoenvironments),
+# plus patch on demoenvironments so it can strip a stuck finalizer (Task 10).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-sweeper
+  labels:
+    {{- include "demo-orchestrator.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-sweeper
+  labels:
+    {{- include "demo-orchestrator.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["list", "get", "delete"]
+  - apiGroups: ["orchestrator.local"]
+    resources: ["demoenvironments"]
+    verbs: ["get", "list", "delete", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-sweeper
+  labels:
+    {{- include "demo-orchestrator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-sweeper
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-sweeper
+    namespace: {{ .Release.Namespace }}

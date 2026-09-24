@@ -1,0 +1,13 @@
+name: healthcare
+display_name: Healthcare — Riverbend Clinics
+brand: { company_name: Riverbend Clinics, primary_color: "#0E7C86" }
+default_ttl: 2h
+max_ttl: 8h
+resources: { cpu: "1", memory: 1Gi, pods: 10 }
+fixtures:
+  seed: 4201
+  locations: 3
+  employees: 60
+  roles: [Registered Nurse, Medical Assistant, Front Desk, Physician, Lab Tech]
+  certifications: [BLS, ACLS, HIPAA Training, RN License]
+  shift_pattern: 12h        # 12h | 8h | split

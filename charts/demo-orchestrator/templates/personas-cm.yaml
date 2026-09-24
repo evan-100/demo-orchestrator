@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-personas
+  labels:
+    {{- include "demo-orchestrator.labels" . | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "personas/*/persona.yaml" }}
+  {{ base (dir $path) }}.yaml: |
+    {{- $.Files.Get $path | trim | nindent 4 }}
+  {{- end }}
