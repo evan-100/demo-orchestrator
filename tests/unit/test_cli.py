@@ -216,6 +216,53 @@ def test_create_waits_and_prints_url_and_expiry_on_ready(fake_kube: FakeKube) ->
     assert "http://healthcare-ready.demo.localtest.me" in result.output
 
 
+def test_create_wait_get_env_raises_exits_1_with_no_traceback(fake_kube: FakeKube) -> None:
+    """A poll that starts fine but breaks partway through must fail cleanly, not crash."""
+    fake_kube.create_status = {"phase": "Pending"}
+    calls = {"n": 0}
+    real_get_env = fake_kube.get_env
+
+    def flaky_get_env(name: str) -> dict[str, Any] | None:
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise TimeoutError("connection reset")
+        return real_get_env(name)
+
+    fake_kube.get_env = flaky_get_env  # type: ignore[method-assign]
+
+    result = runner.invoke(
+        cli_main.app, ["create", "--persona", "healthcare", "--name", "healthcare-flaky"]
+    )
+
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "connection reset" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_create_wait_env_disappearing_exits_1(fake_kube: FakeKube) -> None:
+    """R16: a CR gone mid-wait (deleted or expired) fails fast, not as 'Pending' to the timeout."""
+    fake_kube.create_status = {"phase": "Pending"}
+    calls = {"n": 0}
+    real_get_env = fake_kube.get_env
+
+    def disappearing_get_env(name: str) -> dict[str, Any] | None:
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            return None
+        return real_get_env(name)
+
+    fake_kube.get_env = disappearing_get_env  # type: ignore[method-assign]
+
+    result = runner.invoke(
+        cli_main.app, ["create", "--persona", "healthcare", "--name", "healthcare-vanish"]
+    )
+
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "healthcare-vanish disappeared while waiting (deleted or expired)" in result.output
+
+
 # --- extend --------------------------------------------------------------
 
 
@@ -245,6 +292,35 @@ def test_extend_sends_patch_with_summed_ttl(fake_kube: FakeKube) -> None:
     result = runner.invoke(cli_main.app, ["extend", "healthcare-ab12", "--by", "30m", "--no-wait"])
 
     assert result.exit_code == 0, result.output
+    assert fake_kube.patched == [("healthcare-ab12", {"ttl": "2h30m"})]
+
+
+def test_extend_wait_get_env_raises_exits_1_with_no_traceback(fake_kube: FakeKube) -> None:
+    """The patch already succeeded; a broken poll afterwards must still fail cleanly."""
+    _seed_env(
+        fake_kube,
+        "healthcare-ab12",
+        ttl="2h",
+        expires_at=to_rfc3339(cli_main.utcnow() + timedelta(hours=2)),
+    )
+    calls = {"n": 0}
+    real_get_env = fake_kube.get_env
+
+    def flaky_get_env(name: str) -> dict[str, Any] | None:
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise TimeoutError("api down")
+        return real_get_env(name)
+
+    fake_kube.get_env = flaky_get_env  # type: ignore[method-assign]
+
+    result = runner.invoke(cli_main.app, ["extend", "healthcare-ab12", "--by", "30m"])
+
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "api down" in result.output
+    assert "Traceback" not in result.output
+    # The patch itself must still have gone through before the wait broke.
     assert fake_kube.patched == [("healthcare-ab12", {"ttl": "2h30m"})]
 
 
@@ -378,6 +454,29 @@ def test_delete_wait_polls_until_namespace_gone(fake_kube: FakeKube) -> None:
 
     assert result.exit_code == 0, result.output
     assert "gone" in result.output
+
+
+def test_delete_wait_get_namespace_raises_exits_1_with_no_traceback(fake_kube: FakeKube) -> None:
+    """The CR is already deleted; a broken poll for teardown must still fail cleanly."""
+    _seed_env(fake_kube, "healthcare-ab12", namespace="demo-healthcare-ab12")
+    calls = {"n": 0}
+
+    def flaky_get_namespace(name: str) -> NamespaceInfo | None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return NamespaceInfo(name=name, uid="u", resource_version="1")
+        raise TimeoutError("etcd unavailable")
+
+    fake_kube.get_namespace = flaky_get_namespace  # type: ignore[method-assign]
+
+    result = runner.invoke(cli_main.app, ["delete", "healthcare-ab12", "--wait"])
+
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "etcd unavailable" in result.output
+    assert "Traceback" not in result.output
+    # The delete_env call itself must still have gone through.
+    assert fake_kube.deleted == ["healthcare-ab12"]
 
 
 # --- DEMOCTL_DEBUG ---------------------------------------------------------

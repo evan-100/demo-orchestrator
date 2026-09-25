@@ -186,8 +186,19 @@ def _wait_for_ready(kube: CliKube, name: str, timeout: int) -> None:
     final_status: dict[str, Any] = {"phase": "Timeout"}
     with console.status(f"waiting for {name}...", spinner="dots") as spinner:
         while True:
-            env = kube.get_env(name)
-            status = (env or {}).get("status") or {}
+            try:
+                env = kube.get_env(name)
+            except Exception as exc:
+                _runtime_error(f"failed to get {name}: {exc}")
+                return
+            if env is None:
+                # R16: a CR that vanishes mid-wait (deleted, or expired before
+                # ever reaching Ready) must not be polled as "Pending" until
+                # the timeout — that would misreport a disappearance as a
+                # provisioning delay.
+                _runtime_error(f"{name} disappeared while waiting (deleted or expired)")
+                return
+            status = env.get("status") or {}
             phase = status.get("phase", "Pending")
             spinner.update(f"[cyan]{phase}[/cyan] — {name}")
             if phase in ("Ready", "Failed"):
@@ -346,7 +357,11 @@ def _wait_for_new_expiry(
 ) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        env = kube.get_env(name)
+        try:
+            env = kube.get_env(name)
+        except Exception as exc:
+            _runtime_error(f"failed to get {name}: {exc}")
+            return
         status = (env or {}).get("status") or {}
         expires_at_s = status.get("expiresAt")
         if expires_at_s and expires_at_s != old_expires_at:
@@ -420,6 +435,21 @@ def extend(
         _wait_for_new_expiry(kube, name, old_expires_at, timeout)
 
 
+def _wait_for_namespace_gone(kube: CliKube, namespace: str, timeout: int) -> bool:
+    """Poll until `namespace` is gone. Returns False on a plain timeout."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            ns = kube.get_namespace(namespace)
+        except Exception as exc:
+            _runtime_error(f"failed to check namespace {namespace}: {exc}")
+        if ns is None:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(POLL_INTERVAL_SECONDS)
+
+
 @app.command()
 def delete(
     name: str = typer.Argument(..., help="Environment name"),
@@ -455,14 +485,10 @@ def delete(
     if not wait or namespace is None:
         return
 
-    deadline = time.monotonic() + timeout
     with console.status(f"waiting for namespace {namespace} to disappear...", spinner="dots"):
-        while kube.get_namespace(namespace) is not None:
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(POLL_INTERVAL_SECONDS)
+        gone = _wait_for_namespace_gone(kube, namespace, timeout)
 
-    if kube.get_namespace(namespace) is not None:
+    if not gone:
         _runtime_error(f"timed out waiting for namespace {namespace} to be deleted")
         return
     console.print(f"[green]Namespace {namespace} gone[/green]")
