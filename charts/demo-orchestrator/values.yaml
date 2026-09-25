@@ -3,6 +3,8 @@ image:
   repository: demo-orchestrator
   tag: dev
   pullPolicy: IfNotPresent
+  # Set by `make deploy` to the local image ID, so a rebuilt `:dev` image rolls the operator.
+  buildId: ""
 
 # Runtime settings shared by the operator and the sweeper (see orchestrator.config.Settings).
 config:

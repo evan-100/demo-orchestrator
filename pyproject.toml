@@ -46,6 +46,7 @@ dev = [
 testpaths = ["tests"]
 markers = [
     "integration: requires a running kind cluster (deselected by default; run with -m integration)",
+    "chaos: slow operator outage/restart/capacity e2e, also marked integration (CI: -m 'integration and not chaos')",
 ]
 addopts = "-m 'not integration'"
 

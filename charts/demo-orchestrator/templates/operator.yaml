@@ -22,6 +22,9 @@ spec:
       annotations:
         # Roll the pod when personas change (they are loaded from the mounted files).
         checksum/personas: {{ include (print $.Template.BasePath "/personas-cm.yaml") . | sha256sum }}
+        # Roll the pod when the image is rebuilt under the same tag (`make deploy`
+        # passes the local image ID as image.buildId).
+        checksum/image: {{ .Values.image.buildId | quote }}
     spec:
       serviceAccountName: {{ .Release.Name }}-operator
       securityContext:

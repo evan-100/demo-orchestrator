@@ -41,9 +41,12 @@ def test_chart_copies_match_sources(source: Path, copy: Path) -> None:
         )
 
 
-def _render() -> list[dict[str, Any]]:
+def _render(*helm_args: str) -> list[dict[str, Any]]:
     out = subprocess.run(
-        ["helm", "template", "demo-orchestrator", str(CHART), "-n", "demo-orchestrator"],
+        [
+            *("helm", "template", "demo-orchestrator", str(CHART)),
+            *("-n", "demo-orchestrator", *helm_args),
+        ],
         capture_output=True,
         text=True,
         check=True,
@@ -111,3 +114,19 @@ def test_cluster_roles_cannot_read_secrets_or_use_wildcards(role: str) -> None:
         if "" in rule["apiGroups"] and "secrets" in rule["resources"]:
             # Server-side apply of the per-demo postgres Secret needs create/patch only.
             assert not {"get", "list", "watch"} & set(rule["verbs"]), f"{role}: {rule}"
+
+
+def _operator_pod_annotations(*helm_args: str) -> dict[str, str]:
+    deployment = _find(_render(*helm_args), "Deployment", "demo-orchestrator-operator")
+    annotations: dict[str, str] = deployment["spec"]["template"]["metadata"]["annotations"]
+    return annotations
+
+
+@needs_helm
+def test_operator_pod_rolls_when_the_image_build_changes() -> None:
+    # `make deploy` passes the local image ID: a rebuilt `:dev` image has the
+    # same tag, so without this the pod spec is unchanged and the old pod stays.
+    first = _operator_pod_annotations("--set-string", "image.buildId=sha256:aaa")
+    second = _operator_pod_annotations("--set-string", "image.buildId=sha256:bbb")
+    assert first["checksum/image"] == "sha256:aaa"
+    assert second["checksum/image"] == "sha256:bbb"
