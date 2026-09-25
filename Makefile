@@ -28,9 +28,11 @@ chart-sync:
 	cp deploy/crd/*.yaml $(CHART)/crds/ && cp -R personas $(CHART)/personas
 
 # Helm never upgrades crds/, so apply the CRD first to reach existing installs.
+# --reset-values: with no values flags, `helm upgrade` silently reuses the last
+# release's --set values; each deploy is chart defaults + HELM_ARGS, nothing else.
 deploy: chart-sync
 	kubectl apply --server-side --force-conflicts -f deploy/crd/
-	helm upgrade --install demo-orchestrator $(CHART) --namespace demo-orchestrator --create-namespace --wait --timeout 5m $(HELM_ARGS)
+	helm upgrade --install demo-orchestrator $(CHART) --namespace demo-orchestrator --create-namespace --reset-values --wait --timeout 5m $(HELM_ARGS)
 
 up: cluster build load deploy
 
