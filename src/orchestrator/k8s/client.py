@@ -17,6 +17,7 @@ from kubernetes.dynamic import DynamicClient
 from orchestrator.constants import (
     ANNOTATION_EXPIRES_AT,
     GROUP,
+    KIND,
     LABEL_MANAGED_BY,
     MANAGED_BY_VALUE,
     PLURAL,
@@ -48,12 +49,16 @@ class NamespaceDeletionRefusedError(Exception):
     """Raised when asked to delete a namespace the deletion guard rejects."""
 
 
-def load_kube_config() -> None:
-    """Use the in-cluster service account when running in a pod, else ~/.kube/config."""
+def load_kube_config(context: str | None = None) -> None:
+    """Use the in-cluster service account when running in a pod, else ~/.kube/config.
+
+    `context` selects a kubeconfig context (CLI `--context`); it is ignored
+    in-cluster, where there is only ever one context.
+    """
     try:
         config.load_incluster_config()
     except config.ConfigException:
-        config.load_kube_config()
+        config.load_kube_config(context=context)
 
 
 class KubeClient:
@@ -161,6 +166,35 @@ class KubeClient:
         self._custom.patch_cluster_custom_object_status(
             GROUP, VERSION, PLURAL, name, {"status": status}
         )
+
+    def create_env(self, name: str, spec: dict[str, Any]) -> None:
+        """Create a DemoEnvironment CR named `name` with the given spec (`democtl create`)."""
+        body = {
+            "apiVersion": f"{GROUP}/{VERSION}",
+            "kind": KIND,
+            "metadata": {"name": name},
+            "spec": spec,
+        }
+        self._custom.create_cluster_custom_object(GROUP, VERSION, PLURAL, body)
+
+    def get_env(self, name: str) -> dict[str, Any] | None:
+        """The full DemoEnvironment object (metadata, spec and status), or None if absent."""
+        try:
+            result = self._custom.get_cluster_custom_object(GROUP, VERSION, PLURAL, name)
+        except ApiException as exc:
+            if exc.status == 404:
+                return None
+            raise
+        return dict(result)
+
+    def list_envs(self) -> list[dict[str, Any]]:
+        """Every DemoEnvironment object, full metadata/spec/status (`democtl list`)."""
+        envs = self._custom.list_cluster_custom_object(GROUP, VERSION, PLURAL)
+        return list(envs.get("items", []))
+
+    def patch_env_spec(self, name: str, spec: dict[str, Any]) -> None:
+        """Merge-patch the DemoEnvironment's spec (`democtl extend`)."""
+        self._custom.patch_cluster_custom_object(GROUP, VERSION, PLURAL, name, {"spec": spec})
 
     def delete_env(self, name: str) -> None:
         """Delete the DemoEnvironment (its finalizer then runs); absent is fine."""
