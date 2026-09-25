@@ -16,7 +16,10 @@ namespaces need reaping:
    checks the guard once more). A namespace failing the guard is never deleted,
    whatever the plan said.
 
-Each reap is logged as `sweeper_reaped`. A namespace that is already
+Each reap is logged as `sweeper_reaped`, except when the sweeper only deleted
+the CR and the operator's finalizer removed the namespace: the operator has
+then written the terminal `deleted` event, and one terminal event per env is
+what metrics expect. A namespace that is already
 terminating is logged as `sweeper_skipped` once per deletion, not once per run
 (see `_log_skips`). Individual failures are logged and skipped (the next run
 retries them) and the exit code stays 0. It is non-zero only when the cluster
@@ -97,6 +100,7 @@ class _Reap:
 @dataclass
 class SweepReport:
     reaped: list[str] = field(default_factory=list)
+    operator_finalized: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     refused: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
@@ -224,6 +228,12 @@ class Sweeper:
             logger.error("deletion guard refused namespace %s; not deleting it", name)
             report.refused.append(name)
             return
+        if reap.cr is not None and not reap.finalizer_removed and outcome == "already_gone":
+            # The operator's finalizer tore it down and has written the terminal
+            # `deleted` event; a `sweeper_reaped` too would count this env twice.
+            logger.info("namespace %s: finalized by the operator after CR delete", name)
+            report.operator_finalized.append(name)
+            return
         logger.info("namespace %s: %s", name, outcome)
         report.reaped.append(name)
         try:
@@ -335,8 +345,9 @@ def main() -> int:
         logger.exception("sweep aborted before any action was taken")
         return 1
     logger.info(
-        "sweep done: reaped=%d skipped=%d refused=%d failed=%d deferred=%d",
+        "sweep done: reaped=%d operator_finalized=%d skipped=%d refused=%d failed=%d deferred=%d",
         len(report.reaped),
+        len(report.operator_finalized),
         len(report.skipped),
         len(report.refused),
         len(report.failed),

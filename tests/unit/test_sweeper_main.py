@@ -69,6 +69,7 @@ class FakeKube:
         # between the listing (plan) and the pre-delete read.
         self.fresh_labels: dict[str, dict[str, str]] = {}
         self.conflicts: dict[str, int] = {}
+        self.vanish_before_fetch: set[str] = set()
         self.fail_env_delete = False
         self.fail_listing = False
 
@@ -135,6 +136,8 @@ class FakeKube:
         return True
 
     def get_namespace(self, name: str) -> NamespaceInfo | None:
+        if name in self.vanish_before_fetch:
+            self.namespaces.pop(name, None)
         ns = self.namespaces.get(name)
         if ns is None:
             return None
@@ -209,21 +212,53 @@ def test_unmanaged_and_protected_namespaces_are_never_touched(
 
 
 def test_existing_cr_is_deleted_before_the_namespace(ledger: Ledger, clock: FakeClock) -> None:
+    kube = FakeKube(operator_up=False)
+    kube.add_ns("demo-healthcare-ab12", "healthcare-ab12")
+    # No finalizer: the CR goes at once, and the sweeper deletes the namespace itself.
+    kube.add_env("healthcare-ab12", finalizers=[])
+
+    report = sweeper(kube, ledger, clock).run()
+
+    assert kube.calls == [
+        ("delete_env", "healthcare-ab12"),
+        ("delete_namespace", "demo-healthcare-ab12"),
+    ]
+    assert clock.slept == 0
+    assert report.reaped == ["demo-healthcare-ab12"]
+    (event,) = events(ledger, EventType.SWEEPER_REAPED)
+    assert event.details["cr_existed"] is True
+    assert event.details["finalizer_removed"] is False
+    assert event.details["namespace_outcome"] == "deleted"
+
+
+def test_operator_finalized_namespace_gets_no_sweeper_event(
+    ledger: Ledger, clock: FakeClock
+) -> None:
     kube = FakeKube(operator_up=True)
     kube.add_ns("demo-healthcare-ab12", "healthcare-ab12")
     kube.add_env("healthcare-ab12")
 
     report = sweeper(kube, ledger, clock).run()
 
-    assert kube.calls[0] == ("delete_env", "healthcare-ab12")
-    # The operator's finalizer deleted the namespace; no finalizer surgery needed.
-    assert ("remove_env_finalizer", "healthcare-ab12") not in kube.calls
-    assert ("delete_namespace", "demo-healthcare-ab12") not in kube.calls
-    assert clock.slept == 0
+    assert kube.calls == [("delete_env", "healthcare-ab12")]
+    # The operator's finalizer deleted the namespace and owns the terminal
+    # `deleted` event; a sweeper_reaped as well would double-count the env.
+    assert report.reaped == []
+    assert report.operator_finalized == ["demo-healthcare-ab12"]
+    assert events(ledger) == []
+
+
+def test_orphan_already_gone_is_still_reaped(ledger: Ledger, clock: FakeClock) -> None:
+    kube = FakeKube()
+    kube.add_ns("demo-healthcare-ab12", "healthcare-ab12")
+    # Vanishes between the listing and the pre-delete read, with no CR involved.
+    kube.vanish_before_fetch.add("demo-healthcare-ab12")
+
+    report = sweeper(kube, ledger, clock).run()
+
     assert report.reaped == ["demo-healthcare-ab12"]
     (event,) = events(ledger, EventType.SWEEPER_REAPED)
-    assert event.details["cr_existed"] is True
-    assert event.details["finalizer_removed"] is False
+    assert event.details["cr_existed"] is False
     assert event.details["namespace_outcome"] == "already_gone"
 
 
