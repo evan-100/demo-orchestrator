@@ -18,6 +18,10 @@ LABEL_PERSONA = f"{GROUP}/persona"
 
 ANNOTATION_EXPIRES_AT = f"{GROUP}/expires-at"
 
+# The operator's finalizer on DemoEnvironments (kopf persistence.finalizer). The
+# sweeper strips it from a CR stuck in deletion while the operator is down.
+FINALIZER = f"{GROUP}/finalizer"
+
 PROTECTED_NAMESPACES = frozenset(
     {
         "default",

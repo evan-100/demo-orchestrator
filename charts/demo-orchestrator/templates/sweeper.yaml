@@ -15,6 +15,10 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 0
+      # A run normally takes under a minute (the sweeper stops starting deletes
+      # after 50 s). This kills one that hangs on the API server, so it can't
+      # block later runs forever under concurrencyPolicy: Forbid.
+      activeDeadlineSeconds: 120
       template:
         metadata:
           labels:

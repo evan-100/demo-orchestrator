@@ -7,14 +7,23 @@ the same manifests after a retry or an operator restart is a no-op.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
 from kubernetes.dynamic import DynamicClient
 
-from orchestrator.constants import ANNOTATION_EXPIRES_AT, GROUP, PLURAL, VERSION
+from orchestrator.constants import (
+    ANNOTATION_EXPIRES_AT,
+    GROUP,
+    LABEL_MANAGED_BY,
+    MANAGED_BY_VALUE,
+    PLURAL,
+    VERSION,
+)
 from orchestrator.core.guard import is_deletable_namespace
+from orchestrator.core.sweep import NsInfo
 
 FIELD_MANAGER = "demo-orchestrator"
 
@@ -28,6 +37,11 @@ class NamespaceInfo:
     resource_version: str
     labels: dict[str, str] = field(default_factory=dict)
     terminating: bool = False
+
+
+def _utc(dt: datetime) -> datetime:
+    """The API client parses timestamps as tz-aware; make sure of it, and normalise to UTC."""
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
 
 
 class NamespaceDeletionRefusedError(Exception):
@@ -155,3 +169,72 @@ class KubeClient:
         except ApiException as exc:
             if exc.status != 404:
                 raise
+
+    def list_managed_namespaces(self) -> list[NsInfo]:
+        """Every namespace carrying the managed-by label, as sweep-planning input.
+
+        The label selector only narrows the listing; the deletion guard still
+        decides what may be deleted.
+        """
+        namespaces = self._core.list_namespace(
+            label_selector=f"{LABEL_MANAGED_BY}={MANAGED_BY_VALUE}"
+        )
+        result = []
+        for ns in namespaces.items:
+            meta = ns.metadata
+            result.append(
+                NsInfo(
+                    name=meta.name,
+                    labels=dict(meta.labels or {}),
+                    annotations=dict(meta.annotations or {}),
+                    created_at=_utc(meta.creation_timestamp),
+                    phase=(ns.status.phase if ns.status else None) or "Active",
+                    deletion_started_at=(
+                        _utc(meta.deletion_timestamp) if meta.deletion_timestamp else None
+                    ),
+                )
+            )
+        return result
+
+    def list_env_names(self) -> set[str]:
+        """Names of all DemoEnvironments. Raises on any API error, including a missing CRD."""
+        envs = self._custom.list_cluster_custom_object(GROUP, VERSION, PLURAL)
+        return {env["metadata"]["name"] for env in envs.get("items", [])}
+
+    def get_env_finalizers(self, name: str) -> list[str] | None:
+        """The DemoEnvironment's finalizers, or None if it doesn't exist."""
+        try:
+            env = self._custom.get_cluster_custom_object(GROUP, VERSION, PLURAL, name)
+        except ApiException as exc:
+            if exc.status == 404:
+                return None
+            raise
+        return list(env["metadata"].get("finalizers") or [])
+
+    def remove_env_finalizer(self, name: str, finalizer: str) -> bool:
+        """Remove `finalizer` from the DemoEnvironment, keeping any others.
+
+        The patch carries the resourceVersion it was computed from, so a
+        concurrent change (e.g. a restarted operator) makes it fail with 409
+        instead of clobbering the list. Returns False if the CR or the
+        finalizer is already gone.
+        """
+        try:
+            env = self._custom.get_cluster_custom_object(GROUP, VERSION, PLURAL, name)
+        except ApiException as exc:
+            if exc.status == 404:
+                return False
+            raise
+        meta = env["metadata"]
+        finalizers = list(meta.get("finalizers") or [])
+        if finalizer not in finalizers:
+            return False
+        remaining = [f for f in finalizers if f != finalizer]
+        body = {"metadata": {"finalizers": remaining, "resourceVersion": meta["resourceVersion"]}}
+        try:
+            self._custom.patch_cluster_custom_object(GROUP, VERSION, PLURAL, name, body)
+        except ApiException as exc:
+            if exc.status == 404:
+                return False
+            raise
+        return True

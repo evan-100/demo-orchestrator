@@ -20,7 +20,7 @@ import urllib3
 from kubernetes.client.exceptions import ApiException
 
 from orchestrator.config import get_settings
-from orchestrator.constants import GROUP, PLURAL, VERSION
+from orchestrator.constants import FINALIZER, GROUP, PLURAL, VERSION
 from orchestrator.core.ledger import Ledger
 from orchestrator.core.personas import load_personas
 from orchestrator.k8s.client import KubeClient, load_kube_config
@@ -112,7 +112,7 @@ def configure(settings: kopf.OperatorSettings, **_: Any) -> None:
     settings.persistence.diffbase_storage = kopf.AnnotationsDiffBaseStorage(
         prefix=GROUP, key="last-handled-configuration"
     )
-    settings.persistence.finalizer = f"{GROUP}/finalizer"
+    settings.persistence.finalizer = FINALIZER
     # Warnings and errors (e.g. "failed permanently") are posted as k8s Events;
     # routine waits are demoted below that by QuietWaitsFilter.
     settings.posting.level = logging.WARNING
