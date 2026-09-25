@@ -35,8 +35,13 @@ rules:
     verbs: ["update"]
   # Per-demo kinds rendered from src/orchestrator/k8s/templates (server-side applied).
   - apiGroups: [""]
-    resources: ["configmaps", "secrets", "services", "resourcequotas", "limitranges"]
+    resources: ["configmaps", "services", "resourcequotas", "limitranges"]
     verbs: ["create", "get", "list", "watch", "patch", "delete"]
+  # The per-demo postgres Secret is only ever server-side applied: no reads, so
+  # the operator can't read Secrets anywhere (they go with the namespace on delete).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "patch"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["create", "get", "list", "watch", "patch", "delete"]

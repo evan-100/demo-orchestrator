@@ -27,7 +27,9 @@ chart-sync:
 	rm -rf $(CHART)/crds $(CHART)/personas && mkdir -p $(CHART)/crds
 	cp deploy/crd/*.yaml $(CHART)/crds/ && cp -R personas $(CHART)/personas
 
+# Helm never upgrades crds/, so apply the CRD first to reach existing installs.
 deploy: chart-sync
+	kubectl apply --server-side --force-conflicts -f deploy/crd/
 	helm upgrade --install demo-orchestrator $(CHART) --namespace demo-orchestrator --create-namespace --wait --timeout 5m $(HELM_ARGS)
 
 up: cluster build load deploy

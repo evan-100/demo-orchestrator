@@ -21,7 +21,8 @@ operator:
 
 sweeper:
   schedule: "* * * * *"
-  # Maps to CronJob spec.suspend. Keep true until the sweeper module exists (Task 10).
+  # Maps to CronJob spec.suspend. Until the sweeper module exists (Task 10), deploy
+  # with --set sweeper.suspend=true, or the CronJob fails every minute.
   suspend: false
   resources:
     requests:

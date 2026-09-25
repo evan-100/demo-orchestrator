@@ -99,3 +99,15 @@ def test_operator_cluster_role_covers_status_reads() -> None:
     assert ("apps", "deployments/status", "get") in granted
     assert ("batch", "jobs/status", "get") in granted
     assert (GROUP, f"{PLURAL}/status", "patch") in granted
+
+
+@needs_helm
+@pytest.mark.parametrize("role", ["demo-orchestrator-operator", "demo-orchestrator-sweeper"])
+def test_cluster_roles_cannot_read_secrets_or_use_wildcards(role: str) -> None:
+    rules = _find(_render(), "ClusterRole", role)["rules"]
+    for rule in rules:
+        for field in ("apiGroups", "resources", "verbs"):
+            assert "*" not in rule[field], f"{role}: wildcard in {field}: {rule}"
+        if "" in rule["apiGroups"] and "secrets" in rule["resources"]:
+            # Server-side apply of the per-demo postgres Secret needs create/patch only.
+            assert not {"get", "list", "watch"} & set(rule["verbs"]), f"{role}: {rule}"
