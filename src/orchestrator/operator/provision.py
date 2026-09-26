@@ -5,11 +5,16 @@ raises `kopf.TemporaryError` while waiting on the cluster), and everything it
 needs to resume lives in the CR status, so a pass after an operator restart
 converges exactly like the next pass would have. The order is:
 
-1. First pass only (no `status.createdAt` yet): record `createdAt`, write the
-   `requested` ledger event, and run admission (persona, TTL, capacity). The
-   pass ends there (a 1 s `TemporaryError`) so the status is persisted before
-   any cluster work.
-2. Apply the namespace, then every workload (server-side apply, idempotent).
+1. First pass only (no `status.createdAt` yet): read the capacity count, then
+   record `createdAt`, write the `requested` ledger event, and run admission
+   (name, persona, TTL, capacity). The cluster read comes before any status or
+   ledger write, so a transient error leaves nothing behind and the next pass
+   re-runs admission. The pass ends there (a 1 s `TemporaryError`) so the
+   status is persisted before any cluster work.
+2. Check the namespace is absent or already ours (managed-by label, env label
+   and an ownerReference to this CR's uid); a foreign one fails the env
+   without touching it. Then apply the namespace and every workload
+   (server-side apply, idempotent).
 3. Wait for the postgres Deployment, then enter `Seeding` and apply the seed
    Job. The seed has no DB retry of its own, so it must not start earlier.
 4. Wait for the seed Job to succeed.
@@ -32,7 +37,7 @@ from typing import Any, Literal, NoReturn, Protocol
 
 import kopf
 
-from orchestrator.constants import NS_PREFIX
+from orchestrator.constants import LABEL_ENV, LABEL_MANAGED_BY, MANAGED_BY_VALUE, NS_PREFIX
 from orchestrator.core.durations import InvalidDurationError, parse_duration
 from orchestrator.core.expiry import (
     TTLExceedsMaxError,
@@ -43,8 +48,9 @@ from orchestrator.core.expiry import (
     validate_total_ttl,
 )
 from orchestrator.core.ledger import EventType, Ledger, LedgerEvent
-from orchestrator.core.naming import namespace_for
+from orchestrator.core.naming import admissible_namespace_for
 from orchestrator.core.personas import Persona, UnknownPersonaError, get_persona
+from orchestrator.k8s.client import NamespaceInfo
 from orchestrator.k8s.manifests import (
     EnvContext,
     render_namespace,
@@ -87,6 +93,18 @@ class KubeFacade(Protocol):
 
     def set_namespace_expiry(self, ns: str, expires_at: str) -> None:
         """Set the namespace's expires-at annotation (no-op if the namespace is absent)."""
+
+    def get_namespace(self, name: str) -> NamespaceInfo | None:
+        """The namespace's identity, labels and owners, or None if it doesn't exist."""
+
+
+def is_owned_by(ns: NamespaceInfo, *, name: str, uid: str) -> bool:
+    """True if `ns` is the namespace this operator created for the CR `name`/`uid`."""
+    return (
+        ns.labels.get(LABEL_MANAGED_BY) == MANAGED_BY_VALUE
+        and ns.labels.get(LABEL_ENV) == name
+        and uid in ns.owner_uids
+    )
 
 
 class AdmissionError(Exception):
@@ -231,7 +249,7 @@ def provision(
         return
 
     try:
-        namespace = namespace_for(name)
+        namespace = admissible_namespace_for(name)
         name_error = None
     except ValueError as exc:
         namespace, name_error = f"{NS_PREFIX}{name}", str(exc)
@@ -249,6 +267,10 @@ def provision(
         # First pass: admit and persist, touching nothing in the cluster yet.
         # Ending the pass here lets kopf write `createdAt` before any cluster
         # work, so a crash after this point never repeats the `requested` event.
+        # Every fallible cluster read comes first: kopf persists `patch_status`
+        # even when the pass raises, so a transient error after `createdAt` is
+        # written would skip admission for good.
+        active = deps.kube.count_active_envs(exclude=name) if name_error is None else 0
         patch_status.update(
             {"phase": "Provisioning", "createdAt": to_rfc3339(created_at), "message": ""}
         )
@@ -256,9 +278,7 @@ def provision(
         if name_error is not None:
             p.fail(name_error, namespace_exists=False)
         try:
-            _, ttl = check_admission(
-                spec, deps.personas, deps.kube.count_active_envs(exclude=name), deps.max_envs
-            )
+            _, ttl = check_admission(spec, deps.personas, active, deps.max_envs)
         except AdmissionError as exc:
             p.fail(exc.message, namespace_exists=False)
         patch_status.update(
@@ -311,6 +331,14 @@ def provision(
     )
 
     if CP_WORKLOADS not in p.checkpoints:
+        # Never adopt a namespace we didn't create: a forced apply would stamp
+        # it managed and owned by this CR, and teardown or GC would delete it.
+        existing = deps.kube.get_namespace(p.namespace)
+        if existing is not None and not is_owned_by(existing, name=name, uid=uid):
+            p.fail(
+                f"namespace {p.namespace} already exists and is not owned by this environment",
+                namespace_exists=False,
+            )
         if CP_PROVISIONING not in p.checkpoints:
             p.record(CP_PROVISIONING)
         deps.kube.apply(render_namespace(ctx))

@@ -99,6 +99,27 @@ def test_create_bad_ttl_exits_2_with_no_api_call(fake_kube: FakeKube) -> None:
     assert fake_kube.created == []
 
 
+@pytest.mark.parametrize("name", ["orchestrator", "Bad_Name", "x" * 60])
+def test_create_rejects_names_the_operator_would_refuse_exits_2(
+    fake_kube: FakeKube, name: str
+) -> None:
+    """`orchestrator` targets the protected install namespace `demo-orchestrator`."""
+    result = runner.invoke(
+        cli_main.app, ["create", "--persona", "healthcare", "--name", name, "--no-wait"]
+    )
+
+    assert result.exit_code == 2, result.output
+    assert "namespace" in result.output
+    assert fake_kube.created == []
+
+
+def test_create_protected_name_message_says_protected(fake_kube: FakeKube) -> None:
+    result = runner.invoke(
+        cli_main.app, ["create", "--persona", "healthcare", "--name", "orchestrator", "--no-wait"]
+    )
+    assert "'demo-orchestrator' is protected" in result.output
+
+
 def test_create_unknown_persona_lists_valid_names(fake_kube: FakeKube) -> None:
     result = runner.invoke(cli_main.app, ["create", "--persona", "retail", "--no-wait"])
 
@@ -435,6 +456,17 @@ def test_delete_deletes_the_cr(fake_kube: FakeKube) -> None:
     assert result.exit_code == 0, result.output
     assert fake_kube.deleted == ["healthcare-ab12"]
     assert "Deleted" in result.output
+
+
+def test_delete_missing_env_exits_1_with_one_line_error(fake_kube: FakeKube) -> None:
+    result = runner.invoke(cli_main.app, ["delete", "nope"])
+
+    assert result.exit_code == 1
+    lines = [line for line in result.output.splitlines() if line.strip()]
+    assert len(lines) == 1
+    assert "no such demo environment: nope" in lines[0]
+    assert "Deleted" not in result.output
+    assert fake_kube.deleted == []
 
 
 def test_delete_wait_polls_until_namespace_gone(fake_kube: FakeKube) -> None:

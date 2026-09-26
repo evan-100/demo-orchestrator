@@ -47,7 +47,7 @@ from orchestrator.core.durations import (
 from orchestrator.core.expiry import TTLExceedsMaxError, from_rfc3339, utcnow, validate_total_ttl
 from orchestrator.core.ledger import Ledger
 from orchestrator.core.metrics import compute_metrics
-from orchestrator.core.naming import generate_env_name, namespace_for
+from orchestrator.core.naming import admissible_namespace_for, generate_env_name, namespace_for
 from orchestrator.core.personas import Persona, UnknownPersonaError, get_persona, load_personas
 from orchestrator.core.pricing import Pricing, load_pricing
 from orchestrator.k8s.client import KubeClient, NamespaceInfo, load_kube_config
@@ -272,6 +272,11 @@ def create(
         return
 
     env_name = name if name is not None else generate_env_name(chosen.name)
+    try:
+        admissible_namespace_for(env_name)
+    except ValueError as exc:
+        _usage_error(str(exc))
+        return
     requester = requested_by if requested_by is not None else getpass.getuser()
     spec = {"persona": chosen.name, "ttl": ttl_text, "requestedBy": requester}
 
@@ -484,7 +489,11 @@ def delete(
         _runtime_error(f"failed to get {name}: {exc}")
         return
 
-    namespace = (env.get("status") or {}).get("namespace") if env else None
+    if env is None:
+        _runtime_error(f"no such demo environment: {name}")
+        return
+
+    namespace = (env.get("status") or {}).get("namespace")
     if namespace is None:
         try:
             namespace = namespace_for(name)

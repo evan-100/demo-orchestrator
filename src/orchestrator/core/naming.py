@@ -6,7 +6,7 @@ import random
 import re
 import string
 
-from orchestrator.constants import NS_PREFIX
+from orchestrator.constants import NS_PREFIX, PROTECTED_NAMESPACES
 
 _SUFFIX_ALPHABET = string.digits + "abcdefghijklmnopqrstuvwxyz"
 _SUFFIX_LENGTH = 4
@@ -38,4 +38,19 @@ def namespace_for(env_name: str) -> str:
         )
     if not _DNS_1123_LABEL.fullmatch(namespace):
         raise ValueError(f"namespace {namespace!r} is not a valid DNS-1123 label")
+    return namespace
+
+
+def admissible_namespace_for(env_name: str) -> str:
+    """The namespace for a *new* environment, rejecting names the operator must never target.
+
+    Like `namespace_for`, plus a `ValueError` if the derived namespace is a
+    protected one (e.g. `demo-orchestrator`, the orchestrator's own install
+    namespace): provisioning would adopt it and teardown or GC would delete it.
+    """
+    namespace = namespace_for(env_name)
+    if namespace in PROTECTED_NAMESPACES:
+        raise ValueError(
+            f"namespace {namespace!r} is protected; choose a different environment name"
+        )
     return namespace

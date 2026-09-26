@@ -38,6 +38,7 @@ class NamespaceInfo:
     resource_version: str
     labels: dict[str, str] = field(default_factory=dict)
     terminating: bool = False
+    owner_uids: tuple[str, ...] = ()
 
 
 def _utc(dt: datetime) -> datetime:
@@ -141,6 +142,7 @@ class KubeClient:
             resource_version=meta.resource_version,
             labels=dict(meta.labels or {}),
             terminating=meta.deletion_timestamp is not None,
+            owner_uids=tuple(ref.uid for ref in meta.owner_references or []),
         )
 
     def delete_namespace(self, ns: NamespaceInfo) -> None:

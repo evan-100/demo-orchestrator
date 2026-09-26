@@ -15,10 +15,16 @@ import urllib3
 import yaml
 from kubernetes.client.exceptions import ApiException
 
-from orchestrator.constants import ANNOTATION_EXPIRES_AT, LABEL_ENV
+from orchestrator.constants import (
+    ANNOTATION_EXPIRES_AT,
+    LABEL_ENV,
+    LABEL_MANAGED_BY,
+    MANAGED_BY_VALUE,
+)
 from orchestrator.core.expiry import from_rfc3339, to_rfc3339
 from orchestrator.core.ledger import EventType, Ledger
 from orchestrator.core.personas import Persona, load_personas
+from orchestrator.k8s.client import NamespaceInfo
 from orchestrator.operator import handlers, provision
 from orchestrator.operator.provision import (
     AdmissionError,
@@ -46,13 +52,27 @@ class FakeKube:
         self.active = 0
         self.active_excluded: list[str] = []
         self.namespace_annotations: dict[str, dict[str, str]] = {}
+        self.namespaces: dict[str, NamespaceInfo] = {}
+        self.namespace_reads: list[str] = []
 
     def apply(self, manifest: dict[str, Any]) -> None:
         self.applied.append(copy.deepcopy(manifest))
         if manifest["kind"] == "Namespace":
-            name = manifest["metadata"]["name"]
-            annotations = dict(manifest["metadata"].get("annotations", {}))
+            meta = manifest["metadata"]
+            name = meta["name"]
+            annotations = dict(meta.get("annotations", {}))
             self.namespace_annotations.setdefault(name, {}).update(annotations)
+            self.namespaces[name] = NamespaceInfo(
+                name=name,
+                uid=f"uid-{name}",
+                resource_version="1",
+                labels=dict(meta.get("labels", {})),
+                owner_uids=tuple(ref["uid"] for ref in meta.get("ownerReferences", [])),
+            )
+
+    def get_namespace(self, name: str) -> NamespaceInfo | None:
+        self.namespace_reads.append(name)
+        return self.namespaces.get(name)
 
     def deployment_available(self, ns: str, name: str) -> bool:
         return (ns, name) in self.available
@@ -487,6 +507,121 @@ def test_name_too_long_for_a_namespace_fails_permanently(
     assert patch["phase"] == "Failed"
     assert "63-character" in patch["message"]
     assert kube.applied == []
+    assert _events(ledger) == [EventType.REQUESTED, EventType.FAILED]
+
+
+def test_protected_namespace_name_fails_at_admission(
+    deps: ProvisionDeps, kube: FakeKube, ledger: Ledger, clock: Clock
+) -> None:
+    """`orchestrator` would target `demo-orchestrator`, the install namespace."""
+    patch: dict[str, Any] = {}
+    with pytest.raises(kopf.PermanentError):
+        provision.provision(
+            name="orchestrator",
+            uid=UID,
+            spec={"persona": "healthcare", "ttl": "10m"},
+            status={},
+            creation_timestamp=CREATION_TIMESTAMP,
+            patch_status=patch,
+            deps=deps,
+        )
+    assert patch["phase"] == "Failed"
+    assert "demo-orchestrator" in patch["message"] and "protected" in patch["message"]
+    assert kube.applied == [] and kube.namespace_reads == []
+    assert _events(ledger) == [EventType.REQUESTED, EventType.FAILED]
+
+
+def _existing_namespace(labels: dict[str, str], owner_uids: tuple[str, ...] = ()) -> NamespaceInfo:
+    return NamespaceInfo(
+        name=NAMESPACE,
+        uid="uid-existing",
+        resource_version="7",
+        labels=labels,
+        owner_uids=owner_uids,
+    )
+
+
+@pytest.mark.parametrize(
+    ("labels", "owner_uids"),
+    [
+        pytest.param({}, (), id="foreign-unlabeled"),
+        pytest.param(
+            {LABEL_MANAGED_BY: MANAGED_BY_VALUE, LABEL_ENV: NAME},
+            ("uid-of-an-older-cr",),
+            id="leftover-from-older-cr-uid",
+        ),
+        pytest.param({LABEL_MANAGED_BY: MANAGED_BY_VALUE}, (UID,), id="env-label-missing"),
+    ],
+)
+def test_existing_namespace_not_owned_by_this_env_fails_without_touching_it(
+    deps: ProvisionDeps,
+    kube: FakeKube,
+    ledger: Ledger,
+    clock: Clock,
+    labels: dict[str, str],
+    owner_uids: tuple[str, ...],
+) -> None:
+    kube.namespaces[NAMESPACE] = _existing_namespace(labels, owner_uids)
+    env = Env(deps)
+    env.admit()
+    with pytest.raises(kopf.PermanentError):
+        env.run()
+    assert env.status["phase"] == "Failed"
+    assert env.status["message"] == (
+        f"namespace {NAMESPACE} already exists and is not owned by this environment"
+    )
+    assert kube.applied == []
+    assert NAMESPACE not in kube.namespace_annotations  # expiry annotation never written
+    assert kube.namespaces[NAMESPACE] == _existing_namespace(labels, owner_uids)
+    assert _events(ledger) == [EventType.REQUESTED, EventType.FAILED]
+
+
+def test_existing_namespace_owned_by_this_env_is_resumed_after_restart(
+    deps: ProvisionDeps, kube: FakeKube, ledger: Ledger, clock: Clock
+) -> None:
+    """Crash after the namespace apply, before `workloadsAppliedAt`: carry on."""
+    kube.namespaces[NAMESPACE] = _existing_namespace(
+        {LABEL_MANAGED_BY: MANAGED_BY_VALUE, LABEL_ENV: NAME}, (UID,)
+    )
+    env = Env(deps)
+    env.admit()
+    env.status["checkpoints"] = {provision.CP_PROVISIONING: "2026-09-24T15:00:01.000Z"}
+    with pytest.raises(kopf.TemporaryError):
+        env.run()
+    assert env.status["phase"] == "Provisioning"
+    assert kube.kinds_applied()[0] == "Namespace"
+    assert provision.CP_WORKLOADS in env.status["checkpoints"]
+
+
+class FlakyCountKube(FakeKube):
+    """`count_active_envs` fails once with a transient API error, then works."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.count_failures = 1
+
+    def count_active_envs(self, exclude: str) -> int:
+        if self.count_failures:
+            self.count_failures -= 1
+            raise ApiException(status=503, reason="Service Unavailable")
+        return super().count_active_envs(exclude)
+
+
+def test_transient_error_during_admission_leaves_nothing_and_admission_reruns(
+    deps: ProvisionDeps, ledger: Ledger, clock: Clock
+) -> None:
+    flaky = FlakyCountKube()
+    flaky.active = 5  # at capacity: the retried admission must still reject
+    env = Env(dataclasses.replace(deps, kube=flaky))
+    with pytest.raises(ApiException):
+        env.run()
+    assert env.status == {}  # no createdAt, so the next pass is a first pass again
+    assert _events(ledger) == []
+
+    with pytest.raises(kopf.PermanentError):
+        env.run()
+    assert flaky.active_excluded == [NAME]
+    assert env.status["message"] == "capacity: 5/5 environments in use"
     assert _events(ledger) == [EventType.REQUESTED, EventType.FAILED]
 
 
