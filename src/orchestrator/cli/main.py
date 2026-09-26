@@ -17,16 +17,27 @@ its traceback instead of the one-line message.
 from __future__ import annotations
 
 import getpass
+import json
 import os
 import time
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Any, NoReturn, Protocol
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
+from orchestrator.cli.bench import generate_tag, run_bench
+from orchestrator.cli.ledger_source import LedgerFetchError, fetch_cluster_ledger
+from orchestrator.cli.metrics_render import (
+    InvalidSinceError,
+    parse_since,
+    parse_until,
+    render_report,
+    report_to_dict,
+)
 from orchestrator.config import get_settings
 from orchestrator.core.durations import (
     InvalidDurationError,
@@ -34,11 +45,17 @@ from orchestrator.core.durations import (
     parse_duration,
 )
 from orchestrator.core.expiry import TTLExceedsMaxError, from_rfc3339, utcnow, validate_total_ttl
+from orchestrator.core.ledger import Ledger
+from orchestrator.core.metrics import compute_metrics
 from orchestrator.core.naming import generate_env_name, namespace_for
-from orchestrator.core.personas import UnknownPersonaError, get_persona, load_personas
+from orchestrator.core.personas import Persona, UnknownPersonaError, get_persona, load_personas
+from orchestrator.core.pricing import Pricing, load_pricing
 from orchestrator.k8s.client import KubeClient, NamespaceInfo, load_kube_config
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="Manage demo environments.")
+
+# repo-root/pricing.yaml: src/orchestrator/cli/main.py -> parents[3] is the repo root.
+DEFAULT_PRICING_PATH = Path(__file__).resolve().parents[3] / "pricing.yaml"
 
 
 def _make_console(*, stderr: bool = False) -> Console:
@@ -492,6 +509,200 @@ def delete(
         _runtime_error(f"timed out waiting for namespace {namespace} to be deleted")
         return
     console.print(f"[green]Namespace {namespace} gone[/green]")
+
+
+def _load_pricing_or_warn(path: Path) -> Pricing | None:
+    try:
+        return load_pricing(path)
+    except Exception as exc:
+        console.print(f"[yellow]warning:[/yellow] failed to load pricing from {path}: {exc}")
+        return None
+
+
+def _load_personas_or_warn(personas_dir: Path) -> dict[str, Persona]:
+    try:
+        return load_personas(personas_dir)
+    except Exception as exc:
+        console.print(
+            f"[yellow]warning:[/yellow] failed to load personas from {personas_dir}: {exc}"
+        )
+        return {}
+
+
+def _resolve_ledger_path(
+    *, from_cluster: bool, ledger: str | None, default: Path, context: str | None
+) -> tuple[Path, Path | None]:
+    """Return (path to read, temp path to clean up afterwards or None)."""
+    if from_cluster:
+        try:
+            tmp_path = fetch_cluster_ledger(context)
+        except LedgerFetchError as exc:
+            _runtime_error(str(exc))
+        return tmp_path, tmp_path
+    return (Path(ledger) if ledger is not None else default), None
+
+
+# `ledger`/`pricing` options are plain strings (not `Path`), matching this
+# file's existing convention of typing every typer.Option as str/bool/int —
+# `Path`-typed options also trip ruff's B008 differently than str ones.
+@app.command()
+def metrics(
+    since: str | None = typer.Option(
+        None, "--since", help="Duration (e.g. 7d, 24h, 30m) or ISO8601 timestamp"
+    ),
+    until: str | None = typer.Option(None, "--until", help="ISO8601 timestamp"),
+    json_output: bool = typer.Option(False, "--json", help="Print JSON instead of tables"),
+    from_cluster: bool = typer.Option(
+        False, "--from-cluster", help="Copy the ledger from the running operator pod"
+    ),
+    ledger: str | None = typer.Option(None, "--ledger", help="Path to a ledger file"),
+    pricing_path: str | None = typer.Option(
+        None, "--pricing", help="Path to pricing.yaml (default: repo root)"
+    ),
+    context: str | None = typer.Option(None, "--context", help="kubeconfig context"),
+) -> None:
+    """Provisioning, cleanup and cost metrics computed from the ledger."""
+    if from_cluster and ledger is not None:
+        _usage_error("--from-cluster and --ledger are mutually exclusive")
+        return
+
+    now = utcnow()
+    since_dt: datetime | None = None
+    until_dt: datetime | None = None
+    try:
+        if since is not None:
+            since_dt = parse_since(since, now)
+        if until is not None:
+            until_dt = parse_until(until)
+    except InvalidSinceError as exc:
+        _usage_error(str(exc))
+        return
+
+    settings = get_settings()
+    ledger_path, tmp_path = _resolve_ledger_path(
+        from_cluster=from_cluster, ledger=ledger, default=settings.ledger_path, context=context
+    )
+    try:
+        events = list(Ledger(ledger_path).read())
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+    pricing_file = Path(pricing_path) if pricing_path is not None else DEFAULT_PRICING_PATH
+    pricing_obj = _load_pricing_or_warn(pricing_file)
+    loaded_personas = _load_personas_or_warn(settings.personas_dir)
+
+    report = compute_metrics(
+        events, since=since_dt, until=until_dt, pricing=pricing_obj, personas=loaded_personas
+    )
+
+    if json_output:
+        console.print_json(json.dumps(report_to_dict(report), default=str))
+    else:
+        render_report(console, report, pricing_obj)
+
+
+def _bench_ledger_events(
+    *, from_cluster: bool, ledger: str | None, default: Path, context: str | None
+) -> list[Any]:
+    """Read the current ledger events for one bench poll (a fresh copy each call from-cluster)."""
+    if from_cluster:
+        tmp_path = fetch_cluster_ledger(context)
+        try:
+            return list(Ledger(tmp_path).read())
+        finally:
+            tmp_path.unlink(missing_ok=True)
+    return list(Ledger(Path(ledger) if ledger is not None else default).read())
+
+
+@app.command()
+def bench(
+    persona: str = typer.Option(..., "--persona", help="Persona name"),
+    n: int = typer.Option(..., "--n", help="Number of environments to create"),
+    ttl: str = typer.Option(..., "--ttl", help="Time-to-live per environment, e.g. 2m"),
+    parallel: int = typer.Option(1, "--parallel", help="Max environments in flight at once"),
+    from_cluster: bool = typer.Option(
+        False, "--from-cluster", help="Read the ledger from the running operator pod"
+    ),
+    ledger: str | None = typer.Option(None, "--ledger", help="Path to a ledger file"),
+    timeout_per_env: int = typer.Option(
+        600, "--timeout-per-env", help="Seconds to wait per environment"
+    ),
+    pricing_path: str | None = typer.Option(
+        None, "--pricing", help="Path to pricing.yaml (default: repo root)"
+    ),
+    context: str | None = typer.Option(None, "--context", help="kubeconfig context"),
+) -> None:
+    """Create N tagged environments, wait for them to cycle through, then print metrics."""
+    if from_cluster and ledger is not None:
+        _usage_error("--from-cluster and --ledger are mutually exclusive")
+        return
+    if n <= 0:
+        _usage_error(f"--n must be a positive integer, got {n}")
+        return
+    if parallel <= 0:
+        _usage_error(f"--parallel must be a positive integer, got {parallel}")
+        return
+
+    settings = get_settings()
+    try:
+        loaded_personas = load_personas(settings.personas_dir)
+    except Exception as exc:
+        _runtime_error(f"failed to load personas from {settings.personas_dir}: {exc}")
+        return
+    try:
+        chosen = get_persona(loaded_personas, persona)
+    except UnknownPersonaError as exc:
+        _usage_error(str(exc.args[0]))
+        return
+    try:
+        ttl_delta = parse_duration(ttl)
+        validate_total_ttl(ttl_delta, chosen.max_ttl)
+    except (InvalidDurationError, TTLExceedsMaxError) as exc:
+        _usage_error(str(exc))
+        return
+
+    kube = get_kube(context)
+    tag = generate_tag(utcnow())
+    console.print(
+        f"[bold]bench[/bold] tag={tag} persona={chosen.name} n={n} ttl={ttl} parallel={parallel}"
+    )
+
+    pricing_file = Path(pricing_path) if pricing_path is not None else DEFAULT_PRICING_PATH
+    pricing_obj = _load_pricing_or_warn(pricing_file)
+
+    def bench_ledger_events() -> list[Any]:
+        return _bench_ledger_events(
+            from_cluster=from_cluster, ledger=ledger, default=settings.ledger_path, context=context
+        )
+
+    try:
+        result = run_bench(
+            kube,
+            persona=chosen.name,
+            n=n,
+            ttl=ttl,
+            tag=tag,
+            make_env_name=lambda _i: generate_env_name(chosen.name),
+            ledger_events=bench_ledger_events,
+            parallel=parallel,
+            timeout_per_env=float(timeout_per_env),
+            pricing=pricing_obj,
+            personas=loaded_personas,
+            on_progress=lambda msg: console.print(msg, markup=False),
+        )
+    except LedgerFetchError as exc:
+        _runtime_error(str(exc))
+        return
+    except Exception as exc:
+        _runtime_error(f"bench run failed: {exc}")
+        return
+
+    ready = sum(1 for e in result.envs if e.ready)
+    failed = sum(1 for e in result.envs if e.failed)
+    console.print(f"[bold]bench {tag} done[/bold]: ready={ready} failed={failed} n={n}")
+    if result.metrics is not None:
+        render_report(console, result.metrics, pricing_obj)
 
 
 if __name__ == "__main__":
