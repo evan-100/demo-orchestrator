@@ -15,7 +15,7 @@ spec:
     metadata:
       labels:
         app: crewline
-        {{ label_env }}: {{ env_name }}
+        {{ label_env }}: {{ env_name | tojson }}
     spec:
       securityContext:
         runAsNonRoot: true

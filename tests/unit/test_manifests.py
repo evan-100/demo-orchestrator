@@ -94,6 +94,31 @@ def test_namespace_name(ctx: EnvContext) -> None:
     assert "namespace" not in ns["metadata"]  # a Namespace is not itself namespaced
 
 
+@pytest.mark.parametrize("name", ["1234", "1e3", "yes", "on", "null", "true"])
+def test_yaml_ambiguous_names_render_as_strings(persona: Persona, name: str) -> None:
+    """Valid CR/persona names that YAML would read as int/float/bool/null stay strings."""
+    odd_persona = persona.model_copy(update={"name": name})
+    ctx = EnvContext(
+        env_name=name,
+        namespace=f"demo-{name}",
+        persona=odd_persona,
+        expires_at=datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC),
+        owner_uid="12345678",
+        base_domain="demo.localtest.me",
+    )
+    ns = render_namespace(ctx)
+    assert ns["metadata"]["labels"][LABEL_ENV] == name
+    assert ns["metadata"]["labels"][LABEL_PERSONA] == name
+    assert ns["metadata"]["ownerReferences"][0]["name"] == name
+    assert ns["metadata"]["ownerReferences"][0]["uid"] == "12345678"
+    pod_labels = [
+        doc["spec"]["template"]["metadata"]["labels"][LABEL_ENV]
+        for doc in [*render_workloads(ctx), render_seed_job(ctx)]
+        if doc["kind"] in ("Deployment", "Job")
+    ]
+    assert pod_labels and all(label == name for label in pod_labels)
+
+
 # --- Workloads: namespace scoping --------------------------------------
 
 

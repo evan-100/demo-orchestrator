@@ -4,14 +4,14 @@ metadata:
   name: {{ namespace }}
   labels:
     {{ label_managed_by }}: {{ managed_by_value }}
-    {{ label_env }}: {{ env_name }}
-    {{ label_persona }}: {{ persona.name }}
+    {{ label_env }}: {{ env_name | tojson }}
+    {{ label_persona }}: {{ persona.name | tojson }}
   annotations:
     {{ annotation_expires_at }}: "{{ expires_at }}"
   ownerReferences:
     - apiVersion: {{ group }}/{{ version }}
       kind: {{ kind }}
-      name: {{ env_name }}
-      uid: {{ owner_uid }}
+      name: {{ env_name | tojson }}
+      uid: {{ owner_uid | tojson }}
       controller: true
       blockOwnerDeletion: true

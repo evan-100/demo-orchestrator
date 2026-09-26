@@ -31,7 +31,7 @@ spec:
     metadata:
       labels:
         app: postgres
-        {{ label_env }}: {{ env_name }}
+        {{ label_env }}: {{ env_name | tojson }}
     spec:
       containers:
         - name: postgres
