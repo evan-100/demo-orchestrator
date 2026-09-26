@@ -52,4 +52,4 @@ e2e:
 	uv run pytest -m integration -v
 
 bench:
-	uv run democtl bench --persona healthcare --n 10 --ttl 2m
+	uv run democtl bench --persona healthcare --n 10 --ttl 2m --from-cluster
