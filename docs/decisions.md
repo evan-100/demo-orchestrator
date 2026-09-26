@@ -115,6 +115,11 @@ our code. This is inherent to using `ownerReferences` as a backstop at all: the 
 and the guard protect different failure modes (operator crash vs. malicious tampering)
 and can't both be enforced by the same mechanism. No mitigation is implemented in the
 MVP; an admission policy that validates `ownerReferences` on write would close this.
+The operator never creates that situation itself: it rejects env names whose namespace
+is protected (e.g. `demo-orchestrator`), and before its first namespace apply it fails
+the env, without touching the namespace, if one already exists that isn't labelled
+and owner-referenced for that exact CR (uid). Forced server-side apply would otherwise
+adopt it, and teardown or GC would then delete it.
 
 **(b) The ledger's RWO PVC works only because operator and sweeper share a node.**
 Restated from ADR-5: this is a hard requirement for single-node kind, and needs

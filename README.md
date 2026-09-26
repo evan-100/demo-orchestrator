@@ -42,13 +42,14 @@ roster size and roles, generated from `personas/<name>/persona.yaml`:
 [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
-git clone <this repo> && cd "demo orchestrator"
+git clone <this repo> demo-orchestrator && cd demo-orchestrator
 make up                                            # kind cluster + ingress-nginx + build + load + deploy
 uv run democtl create --persona healthcare --ttl 30m
 ```
 
-`democtl create` prints the environment's name, URL and phase timings once it's
-`Ready`. Visit the printed `http://<name>.demo.localtest.me` URL in a browser.
+`democtl create` prints the environment's name, URL and expiry once it's `Ready`
+(`democtl get <name>` shows the phase timings). Visit the printed
+`http://<name>.demo.localtest.me` URL in a browser.
 
 Tear the whole local cluster down with `make down`.
 

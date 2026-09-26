@@ -14,7 +14,7 @@ here is hand-typed or estimated — see [Reproducing](#reproducing) to regenerat
 | | |
 |---|---|
 | CPU | Apple M1, 8 cores |
-| Memory | 8 GiB (Docker Desktop: 4 GiB / 8 CPUs allotted) |
+| Memory | 8 GiB (Docker Desktop: ≈3.8 GiB (4,106,604,544 bytes) / 8 CPUs allotted) |
 | macOS | 26.2 |
 | Docker | 29.8.0 |
 | kind | v0.33.0 (go1.27.0 darwin/arm64) |
