@@ -1,0 +1,73 @@
+[project]
+name = "demo-orchestrator"
+version = "0.1.0"
+description = "A kopf-based Kubernetes operator that provisions persona-seeded, TTL-bound demo namespaces and reliably tears them down."
+authors = [
+    { name = "Evan Harris", email = "62482366+evan-100@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "faker>=40.39.0",
+    "fastapi>=0.141.1",
+    "jinja2>=3.1.6",
+    "kopf>=1.44.6",
+    "kubernetes>=36.0.3",
+    "psycopg[binary]>=3.3.6",
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
+    "pyyaml>=6.0.3",
+    "rich>=15.0.0",
+    "sqlalchemy>=2.0.54",
+    "typer>=0.27.2",
+    "uvicorn>=0.53.0",
+]
+
+[project.scripts]
+democtl = "orchestrator.cli.main:app"
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = ["orchestrator", "demoapp"]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.13.1",
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.8",
+    "types-pyyaml>=6.0.12.20260906",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: requires a running kind cluster (deselected by default; run with -m integration)",
+    "chaos: slow operator outage/restart/capacity e2e, also marked integration (CI: -m 'integration and not chaos')",
+]
+addopts = "-m 'not integration'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "W"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "orchestrator.core.*"
+strict = true
+
+[[tool.mypy.overrides]]
+module = "kubernetes.*"
+ignore_missing_imports = true

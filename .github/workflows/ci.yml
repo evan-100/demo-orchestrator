@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Same tag as the Makefile's INGRESS_NGINX_MANIFEST, kept in sync by hand.
+  INGRESS_NGINX_MANIFEST: https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.15.1/deploy/static/provider/kind/deploy.yaml
+
+jobs:
+  lint-test:
+    name: lint-test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - run: uv sync --dev
+
+      - run: uv run ruff check .
+
+      - run: uv run ruff format --check .
+
+      - run: uv run mypy src
+
+      - name: Unit tests (coverage >= 85% on orchestrator.core)
+        run: >
+          uv run pytest tests/unit -q
+          --cov=orchestrator.core --cov-report=term --cov-fail-under=85
+
+  e2e:
+    name: e2e
+    needs: lint-test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - uses: helm/kind-action@v1.15.0
+        with:
+          version: v0.33.0
+          cluster_name: demo-orchestrator
+          config: deploy/kind/cluster.yaml
+
+      - name: Install ingress-nginx
+        run: |
+          kubectl apply -f "$INGRESS_NGINX_MANIFEST"
+          kubectl --namespace ingress-nginx rollout status deployment/ingress-nginx-controller --timeout=180s
+
+      - name: Build images
+        run: make build
+
+      - name: Load images into kind
+        run: make load
+
+      - name: Deploy the operator (helm)
+        run: make deploy
+
+      - name: Integration tests (excluding chaos)
+        env:
+          ORCH_MODE: incluster
+        run: uv run pytest -m "integration and not chaos" -v
+
+  chaos:
+    name: chaos
+    # Slow (minutes): operator outage, mid-provision restart, capacity limit.
+    # Only on manual dispatch, never on every push/PR.
+    if: github.event_name == 'workflow_dispatch'
+    needs: e2e
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - uses: helm/kind-action@v1.15.0
+        with:
+          version: v0.33.0
+          cluster_name: demo-orchestrator
+          config: deploy/kind/cluster.yaml
+
+      - name: Install ingress-nginx
+        run: |
+          kubectl apply -f "$INGRESS_NGINX_MANIFEST"
+          kubectl --namespace ingress-nginx rollout status deployment/ingress-nginx-controller --timeout=180s
+
+      - name: Build images
+        run: make build
+
+      - name: Load images into kind
+        run: make load
+
+      - name: Deploy the operator (helm)
+        run: make deploy
+
+      - name: Chaos e2e (operator outage, restart, capacity)
+        env:
+          ORCH_MODE: incluster
+        run: uv run pytest -m "integration and chaos" -v

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Locations</h1>
+    <p class="page-head__sub">{{ rows|length }} site{{ 's' if rows|length != 1 }} with staffing for the current week</p>
+  </div>
+</header>
+
+<section class="panel panel--flush">
+  {% for row in rows %}
+  {% set loc = row.location %}
+  <article class="site">
+    <div class="site__id">
+      <h2 class="site__name">{{ loc.name }}</h2>
+      <p class="muted">{{ loc.address }}, {{ loc.city }}</p>
+      <p class="muted">{{ loc.phone }}</p>
+      <a class="panel__action" href="/people?location={{ loc.id }}">View {{ row.headcount }} people</a>
+    </div>
+    <dl class="site__stats">
+      <div><dt>Staff</dt><dd>{{ row.headcount }}</dd></div>
+      <div><dt>Working today</dt><dd>{{ row.on_shift_today }}</dd></div>
+      <div><dt>Hours this week</dt><dd>{{ '{:,.0f}'.format(row.week_hours) }}</dd></div>
+      <div{% if row.expiring %} class="is-warn"{% endif %}><dt>Renewals due</dt><dd>{{ row.expiring }}</dd></div>
+    </dl>
+    <div class="site__mix">
+      <p class="site__mix-title">Role mix</p>
+      <div class="stack" role="img" aria-label="Role mix at {{ loc.name }}">
+        {% for role, n in row.roles.items() %}
+        <span class="stack__seg" style="flex: {{ n }}; --shade: {{ 100 - loop.index0 * 16 }}%" title="{{ role }}: {{ n }}"></span>
+        {% endfor %}
+      </div>
+      <ul class="stack__legend">
+        {% for role, n in row.roles.items() %}
+        <li><i style="--shade: {{ 100 - loop.index0 * 16 }}%"></i>{{ role }} <span class="muted">{{ n }}</span></li>
+        {% endfor %}
+      </ul>
+    </div>
+  </article>
+  {% endfor %}
+</section>
+{% endblock %}

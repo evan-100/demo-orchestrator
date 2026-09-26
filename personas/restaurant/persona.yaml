@@ -1,0 +1,13 @@
+name: restaurant
+display_name: Restaurant — Saltbox Kitchen Group
+brand: { company_name: Saltbox Kitchen Group, primary_color: "#8B1E3F" }
+default_ttl: 2h
+max_ttl: 8h
+resources: { cpu: "1", memory: 1Gi, pods: 10 }
+fixtures:
+  seed: 3390
+  locations: 5
+  employees: 75
+  roles: [Server, Line Cook, Host, General Manager, Bartender]
+  certifications: [Food Handler, Alcohol Service]
+  shift_pattern: split        # 12h | 8h | split

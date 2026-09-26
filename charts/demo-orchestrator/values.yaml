@@ -1,0 +1,39 @@
+# Built locally and loaded with `kind load docker-image`; no registry.
+image:
+  repository: demo-orchestrator
+  tag: dev
+  pullPolicy: IfNotPresent
+  # Set by `make deploy` to the local image ID, so a rebuilt `:dev` image rolls the operator.
+  buildId: ""
+
+# Runtime settings shared by the operator and the sweeper (see orchestrator.config.Settings).
+config:
+  maxConcurrentEnvs: 5
+  provisionTimeout: 300 # seconds
+  sweepGrace: 120 # seconds
+  baseDomain: demo.localtest.me
+
+operator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 384Mi
+
+sweeper:
+  schedule: "* * * * *"
+  # Maps to CronJob spec.suspend. Set true to pause the backstop (e.g. while debugging).
+  suspend: false
+  resources:
+    requests:
+      cpu: 20m
+      memory: 96Mi
+    limits:
+      memory: 256Mi
+
+# Shared JSONL ledger. ReadWriteOnce works because the operator and sweeper
+# pods run on the same node (single-node kind); see templates/sweeper.yaml.
+ledger:
+  size: 1Gi
+  storageClassName: "" # empty = the cluster default (kind: local-path "standard")

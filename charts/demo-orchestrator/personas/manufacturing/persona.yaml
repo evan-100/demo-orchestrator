@@ -1,0 +1,13 @@
+name: manufacturing
+display_name: Manufacturing — Northgate Fabrication
+brand: { company_name: Northgate Fabrication, primary_color: "#B45309" }
+default_ttl: 2h
+max_ttl: 8h
+resources: { cpu: "1", memory: 1Gi, pods: 10 }
+fixtures:
+  seed: 5817
+  locations: 2
+  employees: 90
+  roles: [Machine Operator, QA Inspector, Forklift Operator, Maintenance Technician, Shift Supervisor]
+  certifications: [OSHA-10, Forklift, Lockout/Tagout]
+  shift_pattern: 8h        # 12h | 8h | split

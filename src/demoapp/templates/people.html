@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>People</h1>
+    <p class="page-head__sub">{{ rows|length }} {{ 'person' if rows|length == 1 else 'people' }}{% if selected_location %} at this location{% endif %}</p>
+  </div>
+</header>
+
+<nav class="chips" aria-label="Filter by location">
+  <a class="chip{% if not selected_location %} is-active{% endif %}" href="/people">All locations</a>
+  {% for loc in locations %}
+  <a class="chip{% if selected_location == loc.id %} is-active{% endif %}" href="/people?location={{ loc.id }}">{{ loc.name }}</a>
+  {% endfor %}
+</nav>
+
+<section class="panel panel--flush">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr><th scope="col">Name</th><th scope="col">Role</th><th scope="col">Location</th><th scope="col">Type</th><th scope="col" class="num">Hourly rate</th><th scope="col">Next renewal</th></tr>
+      </thead>
+      <tbody>
+        {% for p in rows %}
+        <tr>
+          <td>
+            <span class="person">
+              <span class="avatar" aria-hidden="true">{{ p.first_name[0] }}{{ p.last_name[0] }}</span>
+              <span><strong>{{ p.first_name }} {{ p.last_name }}</strong><span class="muted block">{{ p.email }}</span></span>
+            </span>
+          </td>
+          <td>{{ p.role }}</td>
+          <td>{{ p.location_name }}</td>
+          <td>{{ p.employment_type }}</td>
+          <td class="num">${{ '%.2f' % (p.hourly_rate_cents / 100) }}</td>
+          <td>
+            {% if p.next_expiry and p.next_expiry <= soon %}
+            <span class="pill pill--warn">{{ p.next_expiry.strftime('%b %-d') }}</span>
+            {% elif p.next_expiry %}
+            <span class="muted">{{ p.next_expiry.strftime('%b %-d, %Y') }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

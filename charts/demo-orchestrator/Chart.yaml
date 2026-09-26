@@ -1,0 +1,6 @@
+apiVersion: v2
+name: demo-orchestrator
+description: Operator that provisions persona-seeded, TTL-bound demo namespaces, plus the sweeper that reaps them.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

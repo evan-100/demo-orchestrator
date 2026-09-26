@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Payroll summary</h1>
+    <p class="page-head__sub">Pay period {{ period_start.strftime('%b %-d') }} to {{ period_end.strftime('%b %-d, %Y') }}, estimated from scheduled shifts</p>
+  </div>
+</header>
+
+<section class="figures" aria-label="Pay period totals">
+  <div class="figure"><span class="figure__value">{{ gross }}</span><span class="figure__label">Estimated gross pay</span></div>
+  <div class="figure"><span class="figure__value">{{ '{:,.0f}'.format(hours) }}</span><span class="figure__label">Scheduled hours</span></div>
+  <div class="figure"><span class="figure__value">{{ staff }}</span><span class="figure__label">People paid</span></div>
+  <div class="figure"><span class="figure__value">{{ avg_rate }}</span><span class="figure__label">Average hourly rate</span></div>
+</section>
+
+{% for title, rows, col in [('By location', by_location, 'Location'), ('By role', by_role, 'Role')] %}
+<section class="panel panel--flush" aria-label="{{ title }}">
+  <div class="panel__head panel__head--padded"><h2>{{ title }}</h2></div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th scope="col">{{ col }}</th><th scope="col" class="num">People</th><th scope="col" class="num">Hours</th><th scope="col" class="num">Avg rate</th><th scope="col" class="num">Gross</th><th scope="col" class="share-col">Share of pay</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td><strong>{{ r.name }}</strong></td>
+          <td class="num">{{ r.staff }}</td>
+          <td class="num">{{ '{:,.0f}'.format(r.hours) }}</td>
+          <td class="num">{{ r.avg_rate }}</td>
+          <td class="num"><strong>{{ r.gross }}</strong></td>
+          <td class="share-col"><span class="meter"><span class="meter__fill" style="width: {{ '%.1f' % r.share }}%"></span></span><span class="muted share-col__pct">{{ '%.0f' % r.share }}%</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endfor %}
+{% endblock %}

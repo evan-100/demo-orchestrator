@@ -1,0 +1,15 @@
+.git
+.gitignore
+.github
+.venv
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.coverage
+__pycache__
+*.pyc
+data/
+tests/
+docs/
+.superpowers/
+*.md

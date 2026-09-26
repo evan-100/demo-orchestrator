@@ -1,0 +1,20 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: crewline
+  namespace: {{ namespace }}
+  labels:
+    {{ label_managed_by }}: {{ managed_by_value }}
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: {{ env_name }}.{{ base_domain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: crewline
+                port:
+                  number: 8080

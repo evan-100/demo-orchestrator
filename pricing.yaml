@@ -1,0 +1,14 @@
+# GKE Autopilot on-demand list prices used by core.metrics for the cost model.
+#
+# Table: "GKE Autopilot vCPU Price" and "GKE Autopilot Pod Memory Price",
+# general-purpose Pods (container-optimized compute platform),
+# region us-central1 (Iowa), on-demand.
+#
+# These are controller-sourced list prices, not looked up per invocation:
+# never edit vcpu_hour_usd/gib_hour_usd from memory: re-check the source_url
+# and bump `retrieved` if this file is ever refreshed.
+region: us-central1
+vcpu_hour_usd: 0.0445
+gib_hour_usd: 0.0049225
+source_url: https://cloud.google.com/kubernetes-engine/pricing
+retrieved: 2026-09-26

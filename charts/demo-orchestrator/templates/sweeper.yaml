@@ -1,0 +1,62 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-sweeper
+  labels:
+    {{- include "demo-orchestrator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sweeper
+spec:
+  schedule: {{ .Values.sweeper.schedule | quote }}
+  suspend: {{ .Values.sweeper.suspend }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 30
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      # A run normally takes under a minute (the sweeper stops starting deletes
+      # after 50 s). This kills one that hangs on the API server, so it can't
+      # block later runs forever under concurrencyPolicy: Forbid.
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            {{- include "demo-orchestrator.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: sweeper
+        spec:
+          serviceAccountName: {{ .Release.Name }}-sweeper
+          restartPolicy: Never
+          # The ledger PVC is ReadWriteOnce, which is per node: the sweeper can mount it
+          # only on the operator's node. The hard guarantee on kind comes from the
+          # local-path PV's own node affinity; this pod affinity states the intent.
+          # It is "preferred", not "required": when the operator is scaled to 0 (the
+          # Task 12 outage scenario) a required rule would leave the sweeper
+          # unschedulable, exactly when it is needed.
+          affinity:
+            podAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                    topologyKey: kubernetes.io/hostname
+                    labelSelector:
+                      matchLabels:
+                        {{- include "demo-orchestrator.selectorLabels" . | nindent 24 }}
+                        app.kubernetes.io/component: operator
+          securityContext:
+            {{- include "demo-orchestrator.podSecurityContext" . | nindent 12 }}
+          containers:
+            - name: sweeper
+              image: {{ include "demo-orchestrator.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["python", "-m", "orchestrator.sweeper.main"]
+              env:
+                {{- include "demo-orchestrator.env" . | nindent 16 }}
+              resources:
+                {{- toYaml .Values.sweeper.resources | nindent 16 }}
+              securityContext:
+                {{- include "demo-orchestrator.containerSecurityContext" . | nindent 16 }}
+              volumeMounts:
+                {{- include "demo-orchestrator.volumeMounts" . | nindent 16 }}
+          volumes:
+            {{- include "demo-orchestrator.volumes" . | nindent 12 }}

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Certifications</h1>
+    <p class="page-head__sub">Credentials held by your people, soonest renewal first</p>
+  </div>
+</header>
+
+<section class="cert-summary" aria-label="Certification summary">
+  {% for name, s in summary %}
+  <div class="cert-summary__item">
+    <span class="cert-summary__name">{{ name }}</span>
+    <span class="cert-summary__held">{{ s.held }} held</span>
+    {% if s.expiring %}<span class="pill pill--warn">{{ s.expiring }} due soon</span>{% else %}<span class="pill pill--ok">All current</span>{% endif %}
+  </div>
+  {% endfor %}
+</section>
+
+<section class="panel panel--flush panel--warn" aria-labelledby="expiring-title">
+  <div class="panel__head panel__head--padded">
+    <h2 id="expiring-title">Expiring within {{ window_days }} days</h2>
+    <span class="pill pill--warn">{{ expiring|length }}</span>
+  </div>
+  {% if expiring %}
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th scope="col">Person</th><th scope="col">Certification</th><th scope="col">Location</th><th scope="col">Expires</th><th scope="col" class="num">Days left</th></tr></thead>
+      <tbody>
+        {% for c in expiring %}
+        {% set days = (c.expires_on - today).days %}
+        <tr>
+          <td><strong>{{ c.first_name }} {{ c.last_name }}</strong><span class="muted block">{{ c.role }}</span></td>
+          <td>{{ c.name }}</td>
+          <td>{{ c.location_name }}</td>
+          <td>{{ c.expires_on.strftime('%b %-d, %Y') }}</td>
+          <td class="num"><span class="pill pill--warn">{{ 'Expired' if days < 0 else days }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">Nothing is due for renewal in the next {{ window_days }} days.</p>
+  {% endif %}
+</section>
+
+<section class="panel panel--flush" aria-labelledby="current-title">
+  <div class="panel__head panel__head--padded"><h2 id="current-title">Current</h2><span class="muted">{{ current|length }}</span></div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th scope="col">Person</th><th scope="col">Certification</th><th scope="col">Location</th><th scope="col">Issued</th><th scope="col">Expires</th></tr></thead>
+      <tbody>
+        {% for c in current %}
+        <tr>
+          <td><strong>{{ c.first_name }} {{ c.last_name }}</strong><span class="muted block">{{ c.role }}</span></td>
+          <td>{{ c.name }}</td>
+          <td>{{ c.location_name }}</td>
+          <td class="muted">{{ c.issued_on.strftime('%b %-d, %Y') }}</td>
+          <td>{{ c.expires_on.strftime('%b %-d, %Y') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

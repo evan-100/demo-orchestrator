@@ -1,0 +1,49 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed
+  namespace: {{ namespace }}
+  labels:
+    {{ label_managed_by }}: {{ managed_by_value }}
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 240
+  template:
+    metadata:
+      labels:
+        app: seed
+        {{ label_env }}: {{ env_name | tojson }}
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: seed
+          image: {{ crewline_image }}
+          command: ["python", "-m", "demoapp.seed", "--persona-file", "/persona/persona.yaml"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: DATABASE_URL
+          volumeMounts:
+            - name: persona
+              mountPath: /persona
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10001
+      volumes:
+        - name: persona
+          configMap:
+            name: persona

@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Today at {{ brand.company_name }}</h1>
+    <p class="page-head__sub">{{ today.strftime('%A, %B %-d') }} across {{ location_count }} location{{ 's' if location_count != 1 }}</p>
+  </div>
+</header>
+
+<section class="figures" aria-label="Key figures">
+  <div class="figure">
+    <span class="figure__value">{{ headcount }}</span>
+    <span class="figure__label">People on the roster</span>
+  </div>
+  <div class="figure">
+    <span class="figure__value">{{ on_shift_today }}</span>
+    <span class="figure__label">Shifts scheduled today</span>
+  </div>
+  <div class="figure">
+    <span class="figure__value">{{ '{:,.0f}'.format(week_hours) }}</span>
+    <span class="figure__label">Hours scheduled this week</span>
+  </div>
+  <a class="figure figure--link{% if expiring_count %} figure--warn{% endif %}" href="/certifications">
+    <span class="figure__value">{{ expiring_count }}</span>
+    <span class="figure__label">Certifications expiring in {{ window_days }} days</span>
+  </a>
+</section>
+
+<section class="panel board" aria-labelledby="board-title">
+  <div class="panel__head">
+    <h2 id="board-title">Shift board</h2>
+    <a class="panel__action" href="/shifts">Open today's roster</a>
+  </div>
+  <div class="board__grid">
+    <div class="board__ruler" aria-hidden="true">
+      <span></span>
+      <div class="board__ticks">
+        {% for h in hours_ticks %}<span style="left: {{ h / 24 * 100 }}%">{{ '%02d:00' % (h % 24) if h < 24 else '24:00' }}</span>{% endfor %}
+      </div>
+    </div>
+    {% for row in board %}
+    <div class="board__row">
+      <div class="board__loc">{{ row.location.name }}</div>
+      <div class="board__track">
+        {% for h in hours_ticks[1:-1] %}<i class="board__gridline" style="left: {{ h / 24 * 100 }}%"></i>{% endfor %}
+        {% for bar in row.bars %}
+        <div class="bar{% if bar.carried %} bar--carried{% endif %}{% if bar.continues %} bar--continues{% endif %}"
+             style="left: {{ '%.3f' % bar.left }}%; width: {{ '%.3f' % bar.width }}%"
+             title="{{ bar.label }} {{ bar.range }}: {{ bar.staff }} staff{% if bar.carried %} (started yesterday){% endif %}">
+          <span class="bar__label">{{ bar.label }}</span>
+          <span class="bar__count">{{ bar.staff }}</span>
+        </div>
+        {% endfor %}
+        {% if not row.bars %}<span class="board__empty">No shifts scheduled</span>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="board__legend">Each bar is a shift type; the number is how many people are on it.{% if has_carried %} Faded bars are overnight shifts that started yesterday.{% endif %}</p>
+</section>
+
+<div class="split">
+  <section class="panel" aria-labelledby="renewals-title">
+    <div class="panel__head">
+      <h2 id="renewals-title">Renewals due soon</h2>
+      <a class="panel__action" href="/certifications">All certifications</a>
+    </div>
+    {% if expiring %}
+    <ul class="renewals">
+      {% for c in expiring %}
+      {% set days = (c.expires_on - today).days %}
+      <li class="renewals__item">
+        <span>
+          <strong>{{ c.first_name }} {{ c.last_name }}</strong>
+          <span class="muted">{{ c.name }} · {{ c.role }}</span>
+        </span>
+        <span class="pill pill--warn">{{ 'Today' if days == 0 else ('in %d day' % days if days == 1 else 'in %d days' % days) }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty">Every certification is valid for at least {{ window_days }} more days.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel" aria-labelledby="roles-title">
+    <div class="panel__head"><h2 id="roles-title">Headcount by role</h2></div>
+    <ul class="meter-list">
+      {% for r in roles %}
+      <li>
+        <span class="meter-list__name">{{ r.role }}</span>
+        <span class="meter"><span class="meter__fill" style="width: {{ r.n / role_max * 100 }}%"></span></span>
+        <span class="meter-list__value">{{ r.n }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+</div>
+{% endblock %}

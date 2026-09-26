@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Shifts</h1>
+    <p class="page-head__sub">Week of {{ week[0].strftime('%B %-d') }} to {{ week[-1].strftime('%B %-d') }}</p>
+  </div>
+</header>
+
+<section class="panel panel--flush" aria-labelledby="week-title">
+  <div class="panel__head panel__head--padded"><h2 id="week-title">This week by location</h2></div>
+  <div class="table-wrap">
+    <table class="table week">
+      <thead>
+        <tr>
+          <th scope="col">Location</th>
+          {% for d in week %}
+          <th scope="col" class="num{% if d == today %} is-today{% endif %}">
+            <a href="/shifts?day={{ d.isoformat() }}" class="week__day{% if d == day %} is-selected{% endif %}">{{ d.strftime('%a') }} <span class="muted">{{ d.day }}</span></a>
+          </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for loc in locations %}
+        <tr>
+          <th scope="row">{{ loc.name }}</th>
+          {% for d in week %}
+          {% set cell = matrix.get((loc.id, d)) %}
+          <td class="num{% if d == today %} is-today{% endif %}">
+            {% if cell %}<strong>{{ cell[0] }}</strong><span class="muted block">{{ '%.0f' % cell[1] }} h</span>{% else %}<span class="muted">–</span>{% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel" aria-labelledby="roster-title">
+  <div class="panel__head">
+    <h2 id="roster-title">Roster for {{ day.strftime('%A, %B %-d') }}</h2>
+    <span class="muted">{{ roster_count }} shift{{ 's' if roster_count != 1 }}</span>
+  </div>
+  {% for g in groups %}
+  <h3 class="roster__group">{{ g.label }} <span class="muted">{{ g.range }} · {{ g.rows|length }} staff</span></h3>
+  <div class="table-wrap">
+    <table class="table table--compact">
+      <tbody>
+        {% for r in g.rows %}
+        <tr>
+          <td class="roster__time">{{ r.start_minute|clock }}–{{ (r.start_minute + r.minutes)|clock }}</td>
+          <td><strong>{{ r.first_name }} {{ r.last_name }}</strong></td>
+          <td>{{ r.role }}</td>
+          <td class="muted">{{ r.location_name }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">No shifts are scheduled for this day. Pick another day from the week above.</p>
+  {% endfor %}
+</section>
+{% endblock %}
