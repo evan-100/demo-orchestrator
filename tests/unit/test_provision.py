@@ -220,6 +220,18 @@ def test_first_pass_persists_admission_before_any_cluster_work(
     assert kube.applied == []
 
 
+def test_first_pass_records_requested_by_in_requested_event(
+    deps: ProvisionDeps, ledger: Ledger, clock: Clock
+) -> None:
+    """The `requested` ledger event carries `spec.requestedBy` (task 13's bench filters on it)."""
+    env = Env(deps, spec={"persona": "healthcare", "ttl": "10m", "requestedBy": "bench-20260926"})
+    with pytest.raises(kopf.TemporaryError):
+        env.run()
+    (requested,) = list(ledger.read())
+    assert requested.event == EventType.REQUESTED
+    assert requested.details["requestedBy"] == "bench-20260926"
+
+
 def test_second_pass_applies_namespace_then_workloads(
     deps: ProvisionDeps, kube: FakeKube, ledger: Ledger, clock: Clock
 ) -> None:
