@@ -9,7 +9,7 @@ import pytest
 
 from orchestrator.core.expiry import to_rfc3339
 from orchestrator.core.ledger import EventType, LedgerEvent
-from orchestrator.core.metrics import compute_metrics
+from orchestrator.core.metrics import _cpu_to_vcpu, _memory_to_gib, compute_metrics
 from orchestrator.core.personas import Persona
 from orchestrator.core.pricing import Pricing, load_pricing
 
@@ -351,6 +351,54 @@ def test_undecidable_expiry_excluded_from_on_time_with_warning() -> None:
     assert report.warnings  # the "cannot derive expiresAt" case is noted, not silently dropped
 
 
+# --- resource quantity parsing ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("cpu", "expected"),
+    [("500m", 0.5), ("250m", 0.25), ("0.5", 0.5), ("1", 1.0), ("2", 2.0)],
+)
+def test_cpu_to_vcpu(cpu: str, expected: float) -> None:
+    assert _cpu_to_vcpu(cpu) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("memory", "expected"),
+    [
+        ("512Mi", 0.5),
+        ("2Gi", 2.0),
+        ("1G", 0.9313225746154785),
+        ("1024Mi", 1.0),
+        ("2Ti", 2048.0),
+    ],
+)
+def test_memory_to_gib(memory: str, expected: float) -> None:
+    assert _memory_to_gib(memory) == pytest.approx(expected)
+
+
+def test_cpu_and_memory_unparseable_return_none_not_exception() -> None:
+    assert _cpu_to_vcpu("lots") is None
+    assert _memory_to_gib("lots") is None
+
+
+def test_bad_persona_quantity_skips_with_warning_not_exception(
+    pricing: Pricing, personas: dict[str, Persona]
+) -> None:
+    since = T0
+    until = T0 + timedelta(hours=1)
+    broken = dict(personas)
+    broken["healthcare"] = make_persona("healthcare", memory="not-a-quantity")
+    events = [
+        ev(T0, EventType.REQUESTED, "e1"),
+        ev(until, EventType.DELETED, "e1", details={"lag_seconds": 0, "reason": "manual"}),
+    ]
+    report = compute_metrics(events, since=since, until=until, pricing=pricing, personas=broken)
+    assert report.cost is not None  # never crashes
+    assert any("healthcare" in w for w in report.warnings)
+    # The other two (valid) personas still contribute to the baseline.
+    assert report.cost.baseline_usd == pytest.approx(0.055 * 2)
+
+
 # --- cost -------------------------------------------------------------------
 
 
@@ -404,6 +452,27 @@ def test_cost_unknown_persona_skipped_with_warning(
     assert any("does-not-exist" in w for w in report.warnings)
 
 
+def test_cost_env_started_before_since_billed_only_for_window_portion(
+    pricing: Pricing, personas: dict[str, Persona]
+) -> None:
+    """Ruling R20: `since` must not drop an env's pre-window cost to zero."""
+    since = T0 + timedelta(hours=1)
+    until = T0 + timedelta(hours=3)
+    events = [
+        ev(T0, EventType.REQUESTED, "e1"),  # requested an hour before the window opens
+        ev(
+            T0 + timedelta(hours=2),
+            EventType.DELETED,
+            "e1",
+            details={"lag_seconds": 0, "reason": "manual"},
+        ),
+    ]
+    report = compute_metrics(events, since=since, until=until, pricing=pricing, personas=personas)
+    assert report.cost is not None
+    # Billed only for [since, deleted] = 1h, not the full [requested, deleted] = 2h.
+    assert report.cost.on_demand_usd == pytest.approx(0.055 * 1)
+
+
 # --- since/until filtering and empty ledger ----------------------------------
 
 
@@ -450,7 +519,10 @@ def test_empty_ledger_reports_zeros_without_zero_division(
 
 def test_load_pricing_reads_repo_pricing_yaml() -> None:
     loaded = load_pricing(REPO_ROOT / "pricing.yaml")
-    assert loaded.vcpu_hour_usd > 0
-    assert loaded.gib_hour_usd > 0
+    # Pin the ruled GKE Autopilot on-demand list prices exactly, not just > 0,
+    # so an accidental edit to pricing.yaml fails this test instead of
+    # silently changing every cost figure downstream.
+    assert loaded.vcpu_hour_usd == 0.0445
+    assert loaded.gib_hour_usd == 0.0049225
     assert loaded.source_url.startswith("https://")
     assert loaded.region

@@ -276,37 +276,89 @@ def _cleanup_stats(
     )
 
 
-_MEMORY_UNITS: dict[str, float] = {"Gi": 1.0, "Mi": 1.0 / 1024, "Ki": 1.0 / (1024 * 1024)}
+_BYTES_PER_GIB = 1024**3
+# Binary suffixes (×1024ⁿ bytes) and decimal SI suffixes (×1000ⁿ bytes), per
+# the Kubernetes quantity grammar. Checked longest-first isn't required here:
+# every binary suffix ends in "i" and every decimal one doesn't, so "Ti" can
+# never be mistaken for "T".
+_BINARY_MEMORY_SUFFIXES: dict[str, int] = {"Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40}
+_DECIMAL_MEMORY_SUFFIXES: dict[str, int] = {"k": 10**3, "M": 10**6, "G": 10**9, "T": 10**12}
 
 
-def _cpu_to_vcpu(cpu: str) -> float:
-    """Kubernetes CPU quantity ("1", "500m") to vCPU count."""
-    if cpu.endswith("m"):
-        return float(cpu[:-1]) / 1000
-    return float(cpu)
+def _cpu_to_vcpu(cpu: str) -> float | None:
+    """Kubernetes CPU quantity ("1", "500m", "0.5") to vCPU count, or None if unparseable."""
+    try:
+        if cpu.endswith("m"):
+            return float(cpu[:-1]) / 1000
+        return float(cpu)
+    except ValueError:
+        return None
 
 
-def _memory_to_gib(memory: str) -> float:
-    """Kubernetes memory quantity ("1Gi", "512Mi") to GiB."""
-    for suffix, factor in _MEMORY_UNITS.items():
+def _memory_to_gib(memory: str) -> float | None:
+    """Kubernetes memory quantity to GiB, or None if it can't be parsed.
+
+    Supports binary suffixes (Ki/Mi/Gi/Ti), decimal SI suffixes (k/M/G/T),
+    and bare numbers (bytes) — never raises, so one persona with a quantity
+    outside this set (e.g. a typo, or the E/Ei range) can't crash the whole
+    metrics report; the caller skips it with a counted warning instead.
+    """
+    for suffix, bytes_per_unit in {**_BINARY_MEMORY_SUFFIXES, **_DECIMAL_MEMORY_SUFFIXES}.items():
         if memory.endswith(suffix):
-            return float(memory[: -len(suffix)]) * factor
-    return float(memory) / (1024**3)  # bare bytes, unlikely but not invalid
+            try:
+                return float(memory[: -len(suffix)]) * bytes_per_unit / _BYTES_PER_GIB
+            except ValueError:
+                return None
+    try:
+        return float(memory) / _BYTES_PER_GIB
+    except ValueError:
+        return None
 
 
-def _lifetime_hours(rec: _EnvRecord, window_end: datetime) -> float | None:
-    """Hours from `requested` to the first terminal event, or to `window_end` if still alive."""
+def _lifetime_hours(rec: _EnvRecord, window_start: datetime, window_end: datetime) -> float | None:
+    """Hours the env was alive inside `[window_start, window_end]`.
+
+    Runs from `requested.ts` to the first terminal ts, or to `window_end` if
+    it has no terminal yet (still alive) — then both ends are clipped to the
+    window. This is what lets `_cost_stats` be given the *unfiltered* event
+    stream (Ruling R20): an env requested before `since` still gets its
+    lifetime recognised, just billed only for the portion inside the window.
+    """
     if rec.requested is None:
         return None
-    end = rec.terminal.ts if rec.terminal is not None else window_end
-    return max((end - rec.requested.ts).total_seconds(), 0.0) / 3600
+    raw_end = rec.terminal.ts if rec.terminal is not None else window_end
+    start = max(rec.requested.ts, window_start)
+    end = min(raw_end, window_end)
+    return max((end - start).total_seconds(), 0.0) / 3600
 
 
-def _hourly_rate(persona: Persona, pricing: Pricing) -> float:
-    return (
-        _cpu_to_vcpu(persona.resources.cpu) * pricing.vcpu_hour_usd
-        + _memory_to_gib(persona.resources.memory) * pricing.gib_hour_usd
-    )
+def _hourly_rate(persona: Persona, pricing: Pricing) -> float | None:
+    """The persona's on-demand hourly cost, or None if its quantities can't be parsed."""
+    vcpu = _cpu_to_vcpu(persona.resources.cpu)
+    gib = _memory_to_gib(persona.resources.memory)
+    if vcpu is None or gib is None:
+        return None
+    return vcpu * pricing.vcpu_hour_usd + gib * pricing.gib_hour_usd
+
+
+def _persona_rates(
+    personas: dict[str, Persona], pricing: Pricing, warnings: list[str]
+) -> dict[str, float]:
+    """Hourly rate per persona name.
+
+    A persona with an unparseable quantity is omitted here (warned once).
+    """
+    rates: dict[str, float] = {}
+    for name, persona in personas.items():
+        rate = _hourly_rate(persona, pricing)
+        if rate is None:
+            warnings.append(
+                f"persona {name!r}: unparseable cpu/memory quantity "
+                f"({persona.resources.cpu!r}/{persona.resources.memory!r}); excluded from cost"
+            )
+            continue
+        rates[name] = rate
+    return rates
 
 
 def _cost_stats(
@@ -317,29 +369,39 @@ def _cost_stats(
     personas: dict[str, Persona],
     warnings: list[str],
 ) -> CostStats:
-    """On-demand cost of the real envs vs. one always-on env per persona (spec A7)."""
+    """On-demand cost of the real envs vs. one always-on env per persona (spec A7).
+
+    `envs` must come from the *unfiltered* event stream (Ruling R20): building
+    it from a `since`-filtered stream would drop the `requested` event of any
+    env that started earlier, undercounting its cost (and overstating
+    savings) instead of just clipping its lifetime to the window.
+    """
+    rates = _persona_rates(personas, pricing, warnings)
     on_demand_usd = 0.0
     seen_unknown: set[str] = set()
     for env, rec in envs.items():
         if rec.requested is None:
             continue
         persona_name = rec.persona
-        persona = personas.get(persona_name) if persona_name is not None else None
-        if persona is None:
-            key = persona_name or "<none>"
-            if key not in seen_unknown:
-                seen_unknown.add(key)
-                warnings.append(
-                    f"env {env!r}: unknown persona {key!r}; excluded from the cost calculation"
-                )
+        rate = rates.get(persona_name) if persona_name is not None else None
+        if rate is None:
+            # Either no persona in `personas` at all, or a known persona whose
+            # quantities didn't parse (already warned once, above).
+            if persona_name is None or persona_name not in personas:
+                key = persona_name or "<none>"
+                if key not in seen_unknown:
+                    seen_unknown.add(key)
+                    warnings.append(
+                        f"env {env!r}: unknown persona {key!r}; excluded from the cost calculation"
+                    )
             continue
-        hours = _lifetime_hours(rec, window_end)
+        hours = _lifetime_hours(rec, window_start, window_end)
         if hours is None:
             continue
-        on_demand_usd += _hourly_rate(persona, pricing) * hours
+        on_demand_usd += rate * hours
 
     window_hours = (window_end - window_start).total_seconds() / 3600
-    baseline_usd = sum(_hourly_rate(p, pricing) * window_hours for p in personas.values())
+    baseline_usd = sum(rate * window_hours for rate in rates.values())
     savings_pct = ((baseline_usd - on_demand_usd) / baseline_usd * 100) if baseline_usd > 0 else 0.0
     return CostStats(
         on_demand_usd=on_demand_usd,
@@ -360,16 +422,21 @@ def compute_metrics(
 ) -> MetricsReport:
     """Compute the full metrics report from a ledger's events.
 
-    `since`/`until` filter the events considered by every section (a
+    `since`/`until` filter the events considered by provisioning and cleanup (a
     truncated `datetime.now()`-anchored view, e.g. "the last day"). The cost
     window (Ruling R6) is `[since, until]` when given, falling back to the
-    earliest/latest ts among the (already filtered) events on either side; the
-    baseline assumes one always-on environment per persona in `personas` for
-    that whole window. Cost is `None` when `pricing` or `personas` is missing,
-    or when the window can't be established (no events and no explicit
-    since/until).
+    earliest/latest ts among the (since/until-filtered) events on either side;
+    the baseline assumes one always-on environment per persona in `personas`
+    for that whole window. Cost itself is computed from the *unfiltered*
+    event stream with each env's lifetime clipped to the window (Ruling R20):
+    filtering first would drop the `requested` event of any env that started
+    before `since`, undercounting its cost instead of just billing it for the
+    portion inside the window. Cost is `None` when `pricing` or `personas` is
+    missing, or when the window can't be established (no events and no
+    explicit since/until).
     """
-    filtered = [e for e in events if since is None or e.ts >= since]
+    all_events = list(events)
+    filtered = [e for e in all_events if since is None or e.ts >= since]
     filtered = [e for e in filtered if until is None or e.ts <= until]
     envs = _collect(filtered)
     warnings: list[str] = []
@@ -386,6 +453,7 @@ def compute_metrics(
         and window_start is not None
         and window_end is not None
     ):
-        cost = _cost_stats(envs, window_start, window_end, pricing, personas, warnings)
+        cost_envs = _collect(all_events)
+        cost = _cost_stats(cost_envs, window_start, window_end, pricing, personas, warnings)
 
     return MetricsReport(provisioning=provisioning, cleanup=cleanup, cost=cost, warnings=warnings)
