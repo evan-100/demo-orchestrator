@@ -255,9 +255,47 @@ def test_run_bench_waits_for_terminal_events_with_progress(monkeypatch: pytest.M
 
     assert poll_state["n"] >= 3
     assert result.envs[0].terminal_seen
+    assert result.unterminated == []
     assert any("terminal event seen" in m for m in messages)
     assert any("created" in m for m in messages)
     assert any("Ready" in m for m in messages)
+
+
+def test_run_bench_reports_unterminated_envs_on_deadline() -> None:
+    """A ledger that never emits a terminal event must not silently converge.
+
+    `timeout_per_env` is small so the ledger-wait deadline (n * timeout_per_env)
+    is reached quickly against the fake clock.
+    """
+    kube = FakeBenchKube(ready_after_polls=1)
+    clock = FakeClock()
+    tag = "bench-test"
+    names = ["healthcare-0000", "healthcare-0001"]
+
+    def ledger_events() -> list[LedgerEvent]:
+        # Only `requested` events ever show up; nothing terminal, ever.
+        return [_ev(name, EventType.REQUESTED, 0, requestedBy=tag) for name in names]
+
+    result = run_bench(
+        kube,
+        persona="healthcare",
+        n=2,
+        ttl="2m",
+        tag=tag,
+        make_env_name=lambda i: names[i],
+        ledger_events=ledger_events,
+        parallel=2,
+        timeout_per_env=1.0,
+        sleep=clock.sleep,
+        clock=clock.clock,
+        ledger_poll_interval=1.0,
+    )
+
+    assert result.unterminated == sorted(names)
+    assert all(not e.terminal_seen for e in result.envs)
+    # Metrics are still computed on what we do have (both `requested`, no terminal).
+    assert result.metrics is not None
+    assert result.metrics.cleanup.in_flight == 2
 
 
 def test_to_rfc3339_used_in_fixture_smoke() -> None:

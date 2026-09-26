@@ -58,6 +58,10 @@ class BenchResult:
     tag: str
     envs: list[BenchEnvResult] = field(default_factory=list)
     metrics: MetricsReport | None = None
+    # Names of created envs that never reached a terminal ledger event within
+    # the deadline (`_wait_for_terminal_events` gave up). Non-empty means the
+    # run did not fully converge; the caller should treat this as a failure.
+    unterminated: list[str] = field(default_factory=list)
 
 
 def generate_tag(now: datetime) -> str:
@@ -180,10 +184,12 @@ def _wait_for_terminal_events(
     clock: Callable[[], float],
     on_progress: Callable[[str], None],
     poll_interval: float,
-) -> list[LedgerEvent]:
+) -> tuple[list[LedgerEvent], list[str]]:
     """Poll the ledger until every created env has a terminal event, or the deadline passes.
 
-    Returns the last-read event list (used to compute the final metrics).
+    Returns `(events, unterminated)`: the last-read event list (used to compute
+    the final metrics), and the sorted names still pending when the deadline
+    was hit (empty if every env converged).
     """
     pending = set(created_names)
     events: list[LedgerEvent] = []
@@ -197,10 +203,10 @@ def _wait_for_terminal_events(
                 results[name].terminal_seen = True
                 on_progress(f"{name}: terminal event seen")
         if not pending:
-            return events
+            return events, []
         if clock() >= deadline:
             on_progress(f"timed out waiting for terminal events: {sorted(pending)}")
-            return events
+            return events, sorted(pending)
         sleep(poll_interval)
 
 
@@ -243,7 +249,7 @@ def run_bench(
     )
 
     created_names = [name for name in names if results[name].created]
-    events = _wait_for_terminal_events(
+    events, unterminated = _wait_for_terminal_events(
         created_names,
         results,
         ledger_events=ledger_events,
@@ -262,4 +268,6 @@ def run_bench(
     filtered_events = [e for e in events if e.env in bench_env_names]
     report = compute_metrics(filtered_events, pricing=pricing, personas=personas)
 
-    return BenchResult(tag=tag, envs=list(results.values()), metrics=report)
+    return BenchResult(
+        tag=tag, envs=list(results.values()), metrics=report, unterminated=unterminated
+    )

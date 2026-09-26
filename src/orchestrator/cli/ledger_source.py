@@ -16,6 +16,8 @@ from pathlib import Path
 OPERATOR_NAMESPACE = "demo-orchestrator"
 OPERATOR_SELECTOR = "app.kubernetes.io/component=operator"
 REMOTE_LEDGER_PATH = "/var/lib/orchestrator/ledger.jsonl"
+# A hung `kubectl` (e.g. an unreachable API server) must not hang the CLI.
+KUBECTL_TIMEOUT_SECONDS = 60.0
 
 
 class LedgerFetchError(RuntimeError):
@@ -27,7 +29,14 @@ def _kubectl(args: list[str], context: str | None) -> subprocess.CompletedProces
     if context:
         cmd += ["--context", context]
     cmd += args
-    return subprocess.run(cmd, capture_output=True, check=False)
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, check=False, timeout=KUBECTL_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise LedgerFetchError(
+            f"kubectl {' '.join(args)} timed out after {KUBECTL_TIMEOUT_SECONDS:.0f}s"
+        ) from exc
 
 
 def _find_operator_pod(context: str | None) -> str:
@@ -67,15 +76,23 @@ def fetch_cluster_ledger(context: str | None = None) -> Path:
     os.close(fd)
     dest = Path(tmp_name)
 
-    cp_result = _kubectl(
-        ["-n", OPERATOR_NAMESPACE, "cp", f"{pod}:{REMOTE_LEDGER_PATH}", str(dest)], context
-    )
+    try:
+        cp_result = _kubectl(
+            ["-n", OPERATOR_NAMESPACE, "cp", f"{pod}:{REMOTE_LEDGER_PATH}", str(dest)], context
+        )
+    except LedgerFetchError:
+        dest.unlink(missing_ok=True)
+        raise
     if cp_result.returncode == 0:
         return dest
 
-    exec_result = _kubectl(
-        ["-n", OPERATOR_NAMESPACE, "exec", pod, "--", "cat", REMOTE_LEDGER_PATH], context
-    )
+    try:
+        exec_result = _kubectl(
+            ["-n", OPERATOR_NAMESPACE, "exec", pod, "--", "cat", REMOTE_LEDGER_PATH], context
+        )
+    except LedgerFetchError:
+        dest.unlink(missing_ok=True)
+        raise
     if exec_result.returncode != 0:
         dest.unlink(missing_ok=True)
         detail = (

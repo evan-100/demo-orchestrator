@@ -704,6 +704,13 @@ def bench(
     if result.metrics is not None:
         render_report(console, result.metrics, pricing_obj)
 
+    if result.unterminated:
+        names = ", ".join(result.unterminated)
+        _runtime_error(
+            f"{len(result.unterminated)} env(s) never reached a terminal event within the "
+            f"timeout: {names}"
+        )
+
 
 if __name__ == "__main__":
     app()
