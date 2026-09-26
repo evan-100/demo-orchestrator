@@ -6,9 +6,9 @@ clock. Every decision reads state from the CR (status, deletionTimestamp) and
 the cluster, never from memory, so an operator restart changes nothing.
 
 - `extend`: `spec.ttl` changed. `expiresAt = createdAt + ttl` (spec A3), moved
-  in status and on the namespace annotation. An invalid TTL can't be reverted
-  (the user owns the spec), so it's reported in `status.message` and the old
-  expiry stands.
+  in status, on the namespace annotation and in the Crewline banner. An
+  invalid TTL can't be reverted (the user owns the spec), so it's reported in
+  `status.message` and the old expiry stands.
 - `expire`: the periodic timer. Once `expiresAt` has passed, mark the CR
   `Expiring` (so teardown knows the reason), log `expired`, delete the CR.
 - `finalize`: the delete handler, which holds the finalizer. It deletes the
@@ -59,6 +59,9 @@ class LifecycleKube(Protocol):
 
     def set_namespace_expiry(self, ns: str, expires_at: str) -> None:
         """Set the namespace's expires-at annotation (no-op if the namespace is absent)."""
+
+    def set_app_expiry(self, ns: str, expires_at: str) -> None:
+        """Update the expiry the Crewline app shows (no-op if its Deployment is absent)."""
 
     def patch_env_status(self, name: str, status: dict[str, Any]) -> None:
         """Merge-patch the DemoEnvironment's status."""
@@ -138,6 +141,7 @@ def extend(
     namespace = _namespace_name(name)
     if namespace is not None:
         deps.kube.set_namespace_expiry(namespace, new_expires_at)
+        deps.kube.set_app_expiry(namespace, new_expires_at)
     _log(
         deps,
         EventType.EXTENDED,

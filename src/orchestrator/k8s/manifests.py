@@ -37,6 +37,12 @@ POSTGRES_IMAGE = "postgres:16.15-alpine"
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
+# The Crewline Deployment/container name and the env var holding the expiry the
+# app shows in its banner (crewline.yaml.j2). The operator patches that env var
+# when the expiry moves after the first apply.
+CREWLINE_NAME = "crewline"
+APP_EXPIRES_AT_ENV = "EXPIRES_AT"
+
 _WORKLOAD_TEMPLATES = (
     "quota.yaml.j2",
     "limitrange.yaml.j2",
@@ -189,6 +195,8 @@ def render_seed_job(ctx: EnvContext) -> dict[str, Any]:
 
 
 __all__ = [
+    "APP_EXPIRES_AT_ENV",
+    "CREWLINE_NAME",
     "EnvContext",
     "render_namespace",
     "render_seed_job",

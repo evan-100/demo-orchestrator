@@ -23,6 +23,8 @@ from orchestrator.constants import (
 from orchestrator.core.expiry import to_rfc3339
 from orchestrator.core.personas import Persona, load_persona_file
 from orchestrator.k8s.manifests import (
+    APP_EXPIRES_AT_ENV,
+    CREWLINE_NAME,
     EnvContext,
     render_namespace,
     render_seed_job,
@@ -228,6 +230,19 @@ def test_crewline_probes_and_env(ctx: EnvContext) -> None:
     assert {"DATABASE_URL", "PERSONA_FILE", "EXPIRES_AT"} <= env_names
     expires_at_entry = next(e for e in container["env"] if e["name"] == "EXPIRES_AT")
     assert expires_at_entry["value"] == to_rfc3339(ctx.expires_at)
+
+
+def test_app_expiry_patch_target_matches_the_rendered_crewline_deployment(
+    ctx: EnvContext,
+) -> None:
+    """`KubeClient.set_app_expiry` patches by these names; they must match the template."""
+    (deployment,) = [
+        d
+        for d in render_workloads(ctx)
+        if d["kind"] == "Deployment" and d["metadata"]["name"] == CREWLINE_NAME
+    ]
+    container = next(c for c in _containers(deployment) if c["name"] == CREWLINE_NAME)
+    assert any(e["name"] == APP_EXPIRES_AT_ENV for e in container["env"])
 
 
 def test_crewline_image_defaults_and_is_overridable(persona: Persona) -> None:

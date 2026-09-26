@@ -49,6 +49,7 @@ class FakeKube:
         self.namespace_deletes: list[str] = []
         self.env_status_patches: list[tuple[str, dict[str, Any]]] = []
         self.env_deletes: list[str] = []
+        self.app_expiry: dict[str, str] = {}
 
     def add_namespace(self, name: str, labels: dict[str, str] | None = None) -> None:
         self.namespaces[name] = NamespaceInfo(
@@ -73,6 +74,9 @@ class FakeKube:
     def set_namespace_expiry(self, ns: str, expires_at: str) -> None:
         if ns in self.annotations:
             self.annotations[ns][ANNOTATION_EXPIRES_AT] = expires_at
+
+    def set_app_expiry(self, ns: str, expires_at: str) -> None:
+        self.app_expiry[ns] = expires_at
 
     def patch_env_status(self, name: str, status: dict[str, Any]) -> None:
         self.env_status_patches.append((name, copy.deepcopy(status)))
@@ -226,6 +230,7 @@ def test_extend_within_max_updates_status_annotation_and_ledger(
     assert patch["expiresAt"] == new_expires_at
     assert patch["message"] == ""
     assert kube.annotations[NAMESPACE][ANNOTATION_EXPIRES_AT] == new_expires_at
+    assert kube.app_expiry == {NAMESPACE: new_expires_at}  # the in-app banner follows
     events = list(ledger.read())
     assert [e.event for e in events] == [EventType.EXTENDED]
     assert events[0].details == {

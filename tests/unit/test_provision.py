@@ -54,6 +54,7 @@ class FakeKube:
         self.namespace_annotations: dict[str, dict[str, str]] = {}
         self.namespaces: dict[str, NamespaceInfo] = {}
         self.namespace_reads: list[str] = []
+        self.app_expiry: dict[str, str] = {}
 
     def apply(self, manifest: dict[str, Any]) -> None:
         self.applied.append(copy.deepcopy(manifest))
@@ -69,6 +70,9 @@ class FakeKube:
                 labels=dict(meta.get("labels", {})),
                 owner_uids=tuple(ref["uid"] for ref in meta.get("ownerReferences", [])),
             )
+
+    def set_app_expiry(self, ns: str, expires_at: str) -> None:
+        self.app_expiry[ns] = expires_at
 
     def get_namespace(self, name: str) -> NamespaceInfo | None:
         self.namespace_reads.append(name)
@@ -641,6 +645,7 @@ def test_ttl_change_mid_provision_resyncs_namespace_annotation(
         env.run()
     assert env.status["expiresAt"] == "2026-09-24T15:20:00.000Z"
     assert kube.namespace_annotations[NAMESPACE][ANNOTATION_EXPIRES_AT] == env.status["expiresAt"]
+    assert kube.app_expiry == {NAMESPACE: env.status["expiresAt"]}  # the in-app banner follows
     assert len(kube.applied) == applied_before  # a merge patch, not a re-apply
 
 

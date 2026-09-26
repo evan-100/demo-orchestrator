@@ -97,6 +97,9 @@ class KubeFacade(Protocol):
     def get_namespace(self, name: str) -> NamespaceInfo | None:
         """The namespace's identity, labels and owners, or None if it doesn't exist."""
 
+    def set_app_expiry(self, ns: str, expires_at: str) -> None:
+        """Update the expiry the Crewline app shows (no-op if its Deployment is absent)."""
+
 
 def is_owned_by(ns: NamespaceInfo, *, name: str, uid: str) -> bool:
     """True if `ns` is the namespace this operator created for the CR `name`/`uid`."""
@@ -320,6 +323,7 @@ def provision(
     patch_status["expiresAt"] = to_rfc3339(expires_at)
     if CP_WORKLOADS in p.checkpoints and status.get("expiresAt") != patch_status["expiresAt"]:
         deps.kube.set_namespace_expiry(p.namespace, patch_status["expiresAt"])
+        deps.kube.set_app_expiry(p.namespace, patch_status["expiresAt"])
 
     ctx = EnvContext(
         env_name=name,

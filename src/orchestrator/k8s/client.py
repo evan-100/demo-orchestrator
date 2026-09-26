@@ -25,6 +25,7 @@ from orchestrator.constants import (
 )
 from orchestrator.core.guard import is_deletable_namespace
 from orchestrator.core.sweep import NsInfo
+from orchestrator.k8s.manifests import APP_EXPIRES_AT_ENV, CREWLINE_NAME
 
 FIELD_MANAGER = "demo-orchestrator"
 
@@ -124,6 +125,26 @@ class KubeClient:
         body = {"metadata": {"annotations": {ANNOTATION_EXPIRES_AT: expires_at}}}
         try:
             self._core.patch_namespace(ns, body)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+
+    def set_app_expiry(self, ns: str, expires_at: str) -> None:
+        """Point the Crewline banner at a new expiry (no-op if the Deployment is absent).
+
+        A strategic merge patch of the container's `EXPIRES_AT` env var. The pod
+        template changes, so the Deployment rolls; the old pod keeps serving
+        until the new one is ready, and the seed data lives in postgres.
+        """
+        container = {
+            "name": CREWLINE_NAME,
+            "env": [{"name": APP_EXPIRES_AT_ENV, "value": expires_at}],
+        }
+        body = {"spec": {"template": {"spec": {"containers": [container]}}}}
+        try:
+            self._apps.patch_namespaced_deployment(
+                CREWLINE_NAME, ns, body, field_manager=FIELD_MANAGER
+            )
         except ApiException as exc:
             if exc.status != 404:
                 raise

@@ -95,3 +95,28 @@ def test_get_namespace_without_owner_references_has_no_owner_uids() -> None:
     )
     ns = _client(core).get_namespace("demo-x")
     assert ns is not None and ns.owner_uids == () and ns.labels == {}
+
+
+def test_set_app_expiry_patches_the_crewline_expires_at_env() -> None:
+    kube = KubeClient.__new__(KubeClient)
+    kube._apps = MagicMock()
+    kube.set_app_expiry("demo-x", "2026-09-24T16:00:00.000Z")
+    args, kwargs = kube._apps.patch_namespaced_deployment.call_args
+    assert args[:2] == ("crewline", "demo-x")
+    (container,) = args[2]["spec"]["template"]["spec"]["containers"]
+    assert container == {
+        "name": "crewline",
+        "env": [{"name": "EXPIRES_AT", "value": "2026-09-24T16:00:00.000Z"}],
+    }
+    assert kwargs["field_manager"] == "demo-orchestrator"
+
+
+def test_set_app_expiry_is_a_no_op_when_the_deployment_is_absent() -> None:
+    kube = KubeClient.__new__(KubeClient)
+    kube._apps = MagicMock()
+    kube._apps.patch_namespaced_deployment.side_effect = ApiException(status=404)
+    kube.set_app_expiry("demo-x", "2026-09-24T16:00:00.000Z")
+
+    kube._apps.patch_namespaced_deployment.side_effect = ApiException(status=500)
+    with pytest.raises(ApiException):
+        kube.set_app_expiry("demo-x", "2026-09-24T16:00:00.000Z")
