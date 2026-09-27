@@ -42,14 +42,24 @@ roster size and roles, generated from `personas/<name>/persona.yaml`:
 [kind](https://kind.sigs.k8s.io/), `kubectl`, Helm 3, and [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
-git clone <this repo> demo-orchestrator && cd demo-orchestrator
+git clone https://github.com/evan-100/demo-orchestrator.git && cd demo-orchestrator
 make up                                            # kind cluster + ingress-nginx + build + load + deploy
 uv run democtl create --persona healthcare --ttl 30m
 ```
 
-`democtl create` prints the environment's name, URL and expiry once it's `Ready`
-(`democtl get <name>` shows the phase timings). Visit the printed
-`http://<name>.demo.localtest.me` URL in a browser.
+`democtl create` waits for the environment to become `Ready`, then prints its name,
+URL and expiry, e.g.:
+
+```
+Created healthcare-pj79 (persona=healthcare, ttl=30m)
+Ready  healthcare-pj79
+  url:     http://healthcare-pj79.demo.localtest.me
+  expires: 2026-09-27T19:03:13.000Z (in 29m)
+```
+
+The name is random per run — copy the `url:` line from your own output and open it
+in a browser. `democtl get healthcare-pj79` (substitute your own name) shows the
+phase timings.
 
 Tear the whole local cluster down with `make down`.
 
@@ -59,6 +69,9 @@ already exist for a cluster with the name "demo-orchestrator"` if one is already
 present.
 
 ## CLI tour
+
+`healthcare-7f3k` below is a placeholder — substitute the name `democtl create`
+printed for your own environment.
 
 ```bash
 democtl personas                                   # list available personas
