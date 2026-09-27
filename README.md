@@ -38,8 +38,8 @@ roster size and roles, generated from `personas/<name>/persona.yaml`:
 
 ## Quickstart
 
-**Prerequisites:** Docker, [kind](https://kind.sigs.k8s.io/), `kubectl`, Helm 3, and
-[`uv`](https://docs.astral.sh/uv/).
+**Prerequisites:** Docker (daemon running — e.g. Docker Desktop started),
+[kind](https://kind.sigs.k8s.io/), `kubectl`, Helm 3, and [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
 git clone <this repo> demo-orchestrator && cd demo-orchestrator
@@ -53,6 +53,11 @@ uv run democtl create --persona healthcare --ttl 30m
 
 Tear the whole local cluster down with `make down`.
 
+If `make up` fails partway (or you're retrying after a prior run), run `make down`
+first — `make up`'s `cluster` target isn't idempotent and errors with `node(s)
+already exist for a cluster with the name "demo-orchestrator"` if one is already
+present.
+
 ## CLI tour
 
 ```bash
@@ -62,7 +67,7 @@ democtl list                                        # table: name, persona, phas
 democtl get healthcare-7f3k                         # full status incl. phase timings
 democtl extend healthcare-7f3k --by 30m             # capped at the persona's max_ttl
 democtl delete healthcare-7f3k                      # immediate teardown
-democtl metrics --since 7d                          # provisioning p50/p95, cleanup reliability, cost
+democtl metrics --since 7d --from-cluster           # provisioning p50/p95, cleanup reliability, cost
 democtl bench --persona healthcare --n 10 --ttl 2m  # N create→ready→expire cycles, then metrics
 ```
 
